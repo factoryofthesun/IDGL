@@ -28,6 +28,11 @@ from rich.console import Console
 from torch_ema import ExponentialMovingAverage
 
 from packaging import version as pver
+import wandb
+from pdb import set_trace
+
+def to8b(x):
+    return (255*np.clip(x,0,1)).astype(np.uint8)
 
 def custom_meshgrid(*args):
     # ref: https://pytorch.org/docs/stable/generated/torch.meshgrid.html?highlight=meshgrid#torch.meshgrid
@@ -173,6 +178,7 @@ class Trainer(object):
                  use_checkpoint="latest", # which ckpt to use at init time
                  use_tensorboardX=True, # whether to use tensorboard for logging
                  scheduler_update_every_step=False, # whether to call scheduler.step() after every train step
+                 wandb_obj = None
                  ):
         
         self.name = name
@@ -195,6 +201,7 @@ class Trainer(object):
         self.scheduler_update_every_step = scheduler_update_every_step
         self.device = device if device is not None else torch.device(f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu')
         self.console = Console()
+        self.wandb_obj = wandb_obj
 
         # text prompt
         ref_text = self.opt.text
@@ -356,6 +363,9 @@ class Trainer(object):
         # encode pred_rgb to latents
         # _t = time.time()
         loss = self.guidance.train_step(text_z, pred_rgb)
+       
+        #if self.wandb_obj is not None:
+        #    self.wandb_obj.log({'guidance_loss':loss.item()})
         # torch.cuda.synchronize(); print(f'[TIME] total guiding {time.time() - _t:.4f}s')
 
         # occupancy loss
@@ -363,19 +373,23 @@ class Trainer(object):
 
         if self.opt.lambda_opacity > 0:
             loss_opacity = (pred_ws ** 2).mean()
+            if self.wandb_obj is not None:
+                self.wandb_obj.log({'opacity_loss':loss_opacity.item()})
             loss = loss + self.opt.lambda_opacity * loss_opacity
 
         if self.opt.lambda_entropy > 0:
             alphas = (pred_ws).clamp(1e-5, 1 - 1e-5)
             # alphas = alphas ** 2 # skewed entropy, favors 0 over 1
             loss_entropy = (- alphas * torch.log2(alphas) - (1 - alphas) * torch.log2(1 - alphas)).mean()
-                    
+            if self.wandb_obj is not None:
+                self.wandb_obj.log({'entropy_loss':loss_entropy.item()})            
             loss = loss + self.opt.lambda_entropy * loss_entropy
 
         if self.opt.lambda_orient > 0 and 'loss_orient' in outputs:
             loss_orient = outputs['loss_orient']
+            if self.wandb_obj is not None:
+                self.wandb_obj.log({'orient_loss':loss_orient.item()})
             loss = loss + self.opt.lambda_orient * loss_orient
-            
         return pred_rgb, pred_ws, loss
 
     def eval_step(self, data):
@@ -446,7 +460,7 @@ class Trainer(object):
 
     ### ------------------------------
 
-    def train(self, train_loader, valid_loader, max_epochs):
+    def train(self, train_loader, valid_loader,test_loader, max_epochs):
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer = tensorboardX.SummaryWriter(os.path.join(self.workspace, "run", self.name))
 
@@ -463,6 +477,7 @@ class Trainer(object):
             if self.epoch % self.eval_interval == 0:
                 self.evaluate_one_epoch(valid_loader)
                 self.save_checkpoint(full=False, best=True)
+                self.test(test_loader)                
 
         end_t = time.time()
 
@@ -523,6 +538,11 @@ class Trainer(object):
             
             imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_preds, fps=25, quality=8, macro_block_size=1)
             imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=25, quality=8, macro_block_size=1)
+
+            from pdb import set_trace
+            imageio.mimwrite(save_path +'/'+str(name)+'_rgb.gif', all_preds, fps=30)
+            if self.wandb_obj is not None:
+                self.wandb_obj.log({"video": wandb.Video(save_path +"/"+str(name)+'_rgb.gif', fps=30, format='gif')})
 
         self.log(f"==> Finished Test.")
     
@@ -687,6 +707,8 @@ class Trainer(object):
             loss_val = loss.item()
             total_loss += loss_val
 
+            if self.wandb_obj is not None:
+                self.wandb_obj.log({'loss':loss_val})
             if self.local_rank == 0:
                 # if self.report_metric_at_train:
                 #     for metric in self.metrics:

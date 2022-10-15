@@ -4,7 +4,8 @@ import argparse
 from nerf.provider import NeRFDataset
 from nerf.utils import *
 from optimizer import Shampoo
-
+import wandb
+from pdb import set_trace
 # from nerf.gui import NeRFGUI
 
 # torch.autograd.set_detect_anomaly(True)
@@ -61,6 +62,11 @@ if __name__ == '__main__':
     # ### GUI options
     parser.add_argument('--W', type=int, default=800, help="GUI width")
     parser.add_argument('--H', type=int, default=800, help="GUI height")
+
+    ### Logging options
+    parser.add_argument('--wandb_flag', action='store_true', help="log in wandb")
+    parser.add_argument('--project_name', type=str, default='test')    
+    parser.add_argument('--exp_name', type=str, default='test')    
     # parser.add_argument('--radius', type=float, default=3, help="default GUI camera radius from center")
     # parser.add_argument('--fovy', type=float, default=60, help="default GUI camera fovy")
     # parser.add_argument('--light_theta', type=float, default=60, help="default GUI light direction in [0, 180], corresponding to elevation [90, -90]")
@@ -69,6 +75,11 @@ if __name__ == '__main__':
 
     opt = parser.parse_args()
 
+    opt.workspace = opt.project_name+'_'+opt.exp_name
+    if opt.wandb_flag:
+        wandb.init(project = opt.project_name, resume = opt.ckpt is 'latest', name = opt.exp_name)
+    else:
+        wandb = None
     if opt.O:
         opt.fp16 = True
         opt.dir_text = True
@@ -131,15 +142,15 @@ if __name__ == '__main__':
         scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter: 0.1 ** min(iter / opt.iters, 1))
         # scheduler = lambda optimizer: optim.lr_scheduler.OneCycleLR(optimizer, max_lr=opt.lr, total_steps=opt.iters, pct_start=0.1)
 
-        trainer = Trainer('df', opt, model, guidance, device=device, workspace=opt.workspace, optimizer=optimizer, ema_decay=0.95, fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint=opt.ckpt, eval_interval=opt.eval_interval, scheduler_update_every_step=True)
+        trainer = Trainer('df', opt, model, guidance, device=device, workspace=opt.workspace, optimizer=optimizer, ema_decay=0.95, fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint=opt.ckpt, eval_interval=opt.eval_interval, scheduler_update_every_step=True, wandb_obj = wandb)
 
         valid_loader = NeRFDataset(opt, device=device, type='val', H=opt.H, W=opt.W, size=5).dataloader()
 
         max_epoch = np.ceil(opt.iters / len(train_loader)).astype(np.int32)
-        trainer.train(train_loader, valid_loader, max_epoch)
+        test_loader = NeRFDataset(opt, device=device, type='test', H=opt.H, W=opt.W, size=100).dataloader()
+        trainer.train(train_loader, valid_loader,test_loader, max_epoch)
 
         # also test
-        test_loader = NeRFDataset(opt, device=device, type='test', H=opt.H, W=opt.W, size=100).dataloader()
         trainer.test(test_loader)
 
         if opt.save_mesh:
