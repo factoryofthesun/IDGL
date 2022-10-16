@@ -9,11 +9,22 @@ from pdb import set_trace
 # from nerf.gui import NeRFGUI
 
 # torch.autograd.set_detect_anomaly(True)
-
+def clear_directory(path):
+    import shutil
+    for filename in os.listdir(path):
+        file_path = os.path.join(path, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+        except Exception as e:
+            print('Failed to delete %s. Reason: %s' % (file_path, e))
+            
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--text', default=None, help="text prompt")
+    parser.add_argument('--text', type=str, nargs="+", default=None, help="text prompt")
     parser.add_argument('-O', action='store_true', help="equals --fp16 --cuda_ray --dir_text")
     parser.add_argument('-O2', action='store_true', help="equals --fp16 --dir_text")
     parser.add_argument('--test', action='store_true', help="test mode")
@@ -67,6 +78,7 @@ if __name__ == '__main__':
     parser.add_argument('--wandb_flag', action='store_true', help="log in wandb")
     parser.add_argument('--project_name', type=str, default='test')    
     parser.add_argument('--exp_name', type=str, default='test')    
+    parser.add_argument('--overwrite', action='store_true', help="overwrite current experiment")
     # parser.add_argument('--radius', type=float, default=3, help="default GUI camera radius from center")
     # parser.add_argument('--fovy', type=float, default=60, help="default GUI camera fovy")
     # parser.add_argument('--light_theta', type=float, default=60, help="default GUI light direction in [0, 180], corresponding to elevation [90, -90]")
@@ -75,7 +87,10 @@ if __name__ == '__main__':
 
     opt = parser.parse_args()
 
-    opt.workspace = opt.project_name+'_'+opt.exp_name
+    opt.workspace = os.path.join("outputs", opt.project_name+'_'+opt.exp_name)
+    if opt.overwrite and os.path.exists(opt.workspace): 
+        clear_directory(opt.workspace)
+        
     if opt.wandb_flag:
         wandb.init(project = opt.project_name, resume = opt.ckpt is 'latest', name = opt.exp_name)
     else:

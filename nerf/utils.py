@@ -204,7 +204,7 @@ class Trainer(object):
         self.wandb_obj = wandb_obj
 
         # text prompt
-        ref_text = self.opt.text
+        ref_text = ' '.join(self.opt.text)
     
         model.to(self.device)
         if self.world_size > 1:
