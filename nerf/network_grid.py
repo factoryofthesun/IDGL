@@ -11,6 +11,8 @@ from encoding import get_encoder
 from .utils import safe_normalize
 from pdb import set_trace
 import clip
+import GPUtil
+import gc
 class MLP(nn.Module):
     def __init__(self, dim_in, dim_out, dim_hidden, num_layers, nerf_conditioning = False, bias=True):
         super().__init__()
@@ -75,8 +77,10 @@ class NeRFNetwork(NeRFRenderer):
         elif opt.conditioning_model is None:
             self.nerf_conditioning = False 
 
-        
-        self.conditioning_vector = self.get_conditioning_vec()
+        if self.nerf_conditioning:
+            self.conditioning_vector = self.get_conditioning_vec()
+        else:
+            self.conditioning_vector = None
 
         self.encoder, self.in_dim = get_encoder('tiledgrid', input_dim=3, desired_resolution=2048 * self.bound)
 
@@ -139,13 +143,18 @@ class NeRFNetwork(NeRFRenderer):
         # x: [N, 3], in [-bound, bound]
 
         # sigma
+        if self.opt.mem:
+            torch.cuda.empty_cache()
+            gc.collect() 
         h = self.encoder(x, bound=self.bound)
 
         h = self.sigma_net(h, conditioning_vector = self.conditioning_vector)
 
         sigma = trunc_exp(h[..., 0] + self.gaussian(x))
         albedo = torch.sigmoid(h[..., 1:])
-
+        if self.opt.mem:
+            torch.cuda.empty_cache()
+            gc.collect() 
         return sigma, albedo
     
     # ref: https://github.com/zhaofuq/Instant-NSR/blob/main/nerf/network_sdf.py#L192
