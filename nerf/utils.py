@@ -204,8 +204,8 @@ class Trainer(object):
         self.wandb_obj = wandb_obj
 
         # text prompt
-        ref_text = ' '.join(self.opt.text)
-    
+        #ref_text = ' '.join(self.opt.text)
+        ref_text = self.opt.text[0]
         model.to(self.device)
         if self.world_size > 1:
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)

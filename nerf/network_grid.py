@@ -9,23 +9,34 @@ import numpy as np
 from encoding import get_encoder
 
 from .utils import safe_normalize
-
+from pdb import set_trace
+import clip
 class MLP(nn.Module):
-    def __init__(self, dim_in, dim_out, dim_hidden, num_layers, bias=True):
+    def __init__(self, dim_in, dim_out, dim_hidden, num_layers, nerf_conditioning = False, bias=True):
         super().__init__()
         self.dim_in = dim_in
         self.dim_out = dim_out
         self.dim_hidden = dim_hidden
         self.num_layers = num_layers
-
+        self.nerf_conditioning = nerf_conditioning
         net = []
+
+
         for l in range(num_layers):
-            net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias))
+            if self.nerf_conditioning:
+                net.append(nn.Linear(self.dim_in + 512  if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias))
+            else:
+                net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias))
 
         self.net = nn.ModuleList(net)
-    
-    def forward(self, x):
+
+        
+    def forward(self, x, conditioning_vector = None):
+
         for l in range(self.num_layers):
+            if l == 0:
+                if self.nerf_conditioning :
+                    x = torch.cat((x,conditioning_vector['input_vec'].repeat(x.shape[0],1)), dim=1)
             x = self.net[l](x)
             if l != self.num_layers - 1:
                 x = F.relu(x, inplace=True)
@@ -46,9 +57,30 @@ class NeRFNetwork(NeRFRenderer):
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
 
+        self.conditioning_model = opt.conditioning_model
+        if opt.conditioning_model == 'CLIP':
+            self.clip_model, clip_preprocess = clip.load("ViT-B/16", device='cuda', jit=False)
+            for parameters in self.clip_model.parameters():
+                parameters.requires_grad = False
+            self.nerf_conditioning = True
+        elif opt.conditioning_model == 'T5':
+            from transformers import AutoTokenizer, AutoModelWithLMHead
+            self.text_model_tokenizer = AutoTokenizer.from_pretrained("t5-small")
+            self.text_model = AutoModelWithLMHead.from_pretrained("t5-small").cuda()
+            
+            for parameters in self.text_model.parameters():
+                parameters.requires_grad = False
+            self.nerf_conditioning = True
+ 
+        elif opt.conditioning_model is None:
+            self.nerf_conditioning = False 
+
+        
+        self.conditioning_vector = self.get_conditioning_vec()
+
         self.encoder, self.in_dim = get_encoder('tiledgrid', input_dim=3, desired_resolution=2048 * self.bound)
 
-        self.sigma_net = MLP(self.in_dim, 4, hidden_dim, num_layers, bias=True)
+        self.sigma_net = MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True)
 
         # background network
         if self.bg_radius > 0:
@@ -63,6 +95,36 @@ class NeRFNetwork(NeRFRenderer):
             
         else:
             self.bg_net = None
+
+    def get_conditioning_vec(self,index=0):
+        if self.conditioning_model == 'CLIP':
+            ref_text = self.opt.text[index]
+            conditioning_vector = {}
+            #if self.opt.dir_text:
+            #    print('not implemented')
+            text_token = clip.tokenize(ref_text).to('cuda')
+            with torch.no_grad():
+                conditioning_tokens = self.clip_model.encode_text(text_token)
+            conditioning_tokens = conditioning_tokens/ conditioning_tokens.norm(dim=-1, keepdim =True)
+            conditioning_vector['input_vec']  = conditioning_tokens
+            conditioning_vector['input_tokens'] = conditioning_tokens
+
+        elif self.conditioning_model == 'T5':
+            ref_text = self.opt.text[index]
+            conditioning_vector = {}
+            #if self.opt.dir_text:
+            #    print('not implemented')
+            text_token =torch.tensor(self.text_model_tokenizer([ref_text])['input_ids']).to('cuda')
+            decoder_input_ids = self.text_model_tokenizer("dummy text to be ignored", return_tensors="pt").input_ids.cuda()
+            if False: #TODO change later sud
+                conditioning_tokens = self.text_model(text_token, decoder_input_ids = decoder_input_ids)['encoder_last_hidden_state']
+            else:
+                with torch.no_grad():
+                    conditioning_tokens = self.text_model(text_token, decoder_input_ids = decoder_input_ids)['encoder_last_hidden_state']
+            conditioning_vector['input_vec'] = conditioning_tokens.mean(dim=1)/conditioning_tokens.mean(dim=1).norm(dim=-1, keepdim=True)
+            conditioning_vector['input_tokens'] = conditioning_tokens/conditioning_tokens.norm(dim=-1, keepdim = True )
+        return conditioning_vector    
+
 
     # add a density blob to the scene center
     def gaussian(self, x):
@@ -79,7 +141,7 @@ class NeRFNetwork(NeRFRenderer):
         # sigma
         h = self.encoder(x, bound=self.bound)
 
-        h = self.sigma_net(h)
+        h = self.sigma_net(h, conditioning_vector = self.conditioning_vector)
 
         sigma = trunc_exp(h[..., 0] + self.gaussian(x))
         albedo = torch.sigmoid(h[..., 1:])

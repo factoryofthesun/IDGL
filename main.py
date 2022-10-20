@@ -79,13 +79,21 @@ if __name__ == '__main__':
     parser.add_argument('--project_name', type=str, default='test')    
     parser.add_argument('--exp_name', type=str, default='test')    
     parser.add_argument('--overwrite', action='store_true', help="overwrite current experiment")
+
+    ### Conditioning options
+    parser.add_argument('--conditioning_model', type=str, default=None)
     # parser.add_argument('--radius', type=float, default=3, help="default GUI camera radius from center")
     # parser.add_argument('--fovy', type=float, default=60, help="default GUI camera fovy")
     # parser.add_argument('--light_theta', type=float, default=60, help="default GUI light direction in [0, 180], corresponding to elevation [90, -90]")
     # parser.add_argument('--light_phi', type=float, default=0, help="default GUI light direction in [0, 360), azimuth")
     # parser.add_argument('--max_spp', type=int, default=1, help="GUI rendering max sample per pixel")
-
     opt = parser.parse_args()
+
+    with open(opt.text[0]) as f:
+        lines = f.readlines()
+    lines = [line.replace("\n", "") for line in lines]
+    opt.text = lines
+    print(opt.text)
 
     opt.workspace = os.path.join("outputs", opt.project_name+'_'+opt.exp_name)
     if opt.overwrite and os.path.exists(opt.workspace): 
