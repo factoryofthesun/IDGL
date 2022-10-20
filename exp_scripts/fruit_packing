@@ -1,0 +1,27 @@
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample2_0_train.txt --exp_name fruit_sample2_0_condNone_normNone 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample2_0_train.txt --exp_name fruit_sample2_0_condCLIP_normNone --conditioning_model CLIP 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample2_0_train.txt --exp_name fruit_sample2_0_condT5_normNone --conditioning_model T5 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample2_1_train.txt --exp_name fruit_sample2_1_condNone_normNone 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample2_1_train.txt --exp_name fruit_sample2_1_condCLIP_normNone --conditioning_model CLIP 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample2_1_train.txt --exp_name fruit_sample2_1_condT5_normNone --conditioning_model T5 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample2_2_train.txt --exp_name fruit_sample2_2_condNone_normNone 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample2_2_train.txt --exp_name fruit_sample2_2_condCLIP_normNone --conditioning_model CLIP 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample2_2_train.txt --exp_name fruit_sample2_2_condT5_normNone --conditioning_model T5 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample5_0_train.txt --exp_name fruit_sample5_0_condNone_normNone 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample5_0_train.txt --exp_name fruit_sample5_0_condCLIP_normNone --conditioning_model CLIP 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample5_0_train.txt --exp_name fruit_sample5_0_condT5_normNone --conditioning_model T5 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample5_1_train.txt --exp_name fruit_sample5_1_condNone_normNone 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample5_1_train.txt --exp_name fruit_sample5_1_condCLIP_normNone --conditioning_model CLIP 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample5_1_train.txt --exp_name fruit_sample5_1_condT5_normNone --conditioning_model T5 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample5_2_train.txt --exp_name fruit_sample5_2_condNone_normNone 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample5_2_train.txt --exp_name fruit_sample5_2_condCLIP_normNone --conditioning_model CLIP 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sample5_2_train.txt --exp_name fruit_sample5_2_condT5_normNone --conditioning_model T5 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sampleall_0_train.txt --exp_name fruit_sampleall_0_condNone_normNone 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sampleall_0_train.txt --exp_name fruit_sampleall_0_condCLIP_normNone --conditioning_model CLIP 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sampleall_0_train.txt --exp_name fruit_sampleall_0_condT5_normNone --conditioning_model T5 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sampleall_1_train.txt --exp_name fruit_sampleall_1_condNone_normNone 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sampleall_1_train.txt --exp_name fruit_sampleall_1_condCLIP_normNone --conditioning_model CLIP 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sampleall_1_train.txt --exp_name fruit_sampleall_1_condT5_normNone --conditioning_model T5 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sampleall_2_train.txt --exp_name fruit_sampleall_2_condNone_normNone 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sampleall_2_train.txt --exp_name fruit_sampleall_2_condCLIP_normNone --conditioning_model CLIP 
+python main.py -O --ckpt scratch --project_name fruit_packing --eval_interval 10 --text ./exp_scripts/fruit_sampleall_2_train.txt --exp_name fruit_sampleall_2_condT5_normNone --conditioning_model T5 

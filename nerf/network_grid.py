@@ -97,6 +97,7 @@ class NeRFNetwork(NeRFRenderer):
             self.bg_net = None
 
     def get_conditioning_vec(self,index=0):
+        conditioning_vector = None 
         if self.conditioning_model == 'CLIP':
             ref_text = self.opt.text[index]
             conditioning_vector = {}
