@@ -1,9 +1,11 @@
 #conditioning with T5
 python main.py --text prompt.txt --workspace trial -O --exp_name attribute_T5 --project_name object_name --conditioning_model T5 --ckpt scratch --wandb_flag
-
+python main.py --text prompt.txt --workspace trial -O --exp_name attribute_T5 --project_name object_name --conditioning_model T5 --ckpt scratch --wandb_flag --num_layers 4 --hidden_dim 512
 
 #conditioning with CLIP
 python main.py --text prompt.txt --workspace trial -O --exp_name attribute_CLIP --project_name object_name --conditioning_model CLIP --ckpt scratch --wandb_flag
+python main.py --text pumpkin_text.txt --workspace trial -O --exp_name attribute_CLIP --project_name object_name --conditioning_model CLIP --ckpt scratch --num_layers 4 --hidden_dim 512 
 
 #No conditioning (baseline)
 python main.py --text prompt.txt --workspace trial -O --exp_name attribute_CLIP --project_name object_name  --ckpt scratch --wandb_flag
+python main.py --text prompt.txt --workspace trial -O --exp_name attribute_CLIP --project_name object_name  --ckpt scratch --wandb_flag --num_layers 4 --hidden_dim 512 
