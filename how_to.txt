@@ -1,0 +1,3 @@
+python main.py --text prompt.txt --workspace trial -O --exp_name attribute_T5 --project_name object_name --conditioning_model T5 --ckpt scratch --wandb_flag
+
+python main.py --text prompt.txt --workspace trial -O --exp_name attribute_CLIP --project_name object_name --conditioning_model CLIP --ckpt scratch --wandb_flag
