@@ -30,6 +30,8 @@ from torch_ema import ExponentialMovingAverage
 from packaging import version as pver
 import wandb
 from pdb import set_trace
+import GPUtil
+import gc
 
 def to8b(x):
     return (255*np.clip(x,0,1)).astype(np.uint8)
@@ -321,6 +323,8 @@ class Trainer(object):
     ### ------------------------------	
 
     def train_step(self, data):
+        if self.opt.mem:
+            torch.cuda.empty_cache()
 
         rays_o = data['rays_o'] # [B, N, 3]
         rays_d = data['rays_d'] # [B, N, 3]
@@ -346,7 +350,13 @@ class Trainer(object):
 
         # _t = time.time()
         bg_color = torch.rand((B * N, 3), device=rays_o.device) # pixel-wise random
+        if self.opt.mem:
+            torch.cuda.empty_cache()
+            gc.collect()
         outputs = self.model.render(rays_o, rays_d, staged=False, perturb=True, bg_color=bg_color, ambient_ratio=ambient_ratio, shading=shading, force_all_rays=True, **vars(self.opt))
+        if self.opt.mem:
+            torch.cuda.empty_cache()
+            gc.collect() 
         pred_rgb = outputs['image'].reshape(B, H, W, 3).permute(0, 3, 1, 2).contiguous() # [1, 3, H, W]
         # torch.cuda.synchronize(); print(f'[TIME] nerf render {time.time() - _t:.4f}s')
         

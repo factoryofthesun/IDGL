@@ -80,8 +80,16 @@ if __name__ == '__main__':
     parser.add_argument('--exp_name', type=str, default='test')    
     parser.add_argument('--overwrite', action='store_true', help="overwrite current experiment")
 
+    ###Network options
+    parser.add_argument('--num_layers', type=int, default=3, help="render width for NeRF in training")
+    parser.add_argument('--hidden_dim', type=int, default=64, help="render width for NeRF in training")
+
     ### Conditioning options
     parser.add_argument('--conditioning_model', type=str, default=None)
+
+
+    #### Other option
+    parser.add_argument('--mem', action='store_true', help="overwrite current experiment")
     # parser.add_argument('--radius', type=float, default=3, help="default GUI camera radius from center")
     # parser.add_argument('--fovy', type=float, default=60, help="default GUI camera fovy")
     # parser.add_argument('--light_theta', type=float, default=60, help="default GUI light direction in [0, 180], corresponding to elevation [90, -90]")
@@ -100,7 +108,7 @@ if __name__ == '__main__':
         clear_directory(opt.workspace)
         
     if opt.wandb_flag:
-        wandb.init(project = opt.project_name, resume = opt.ckpt is 'latest', name = opt.exp_name)
+        wandb.init(project = opt.project_name,config = opt, resume = opt.ckpt is 'latest', name = opt.exp_name)
     else:
         wandb = None
     if opt.O:
@@ -130,7 +138,7 @@ if __name__ == '__main__':
 
     seed_everything(opt.seed)
 
-    model = NeRFNetwork(opt)
+    model = NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim)
 
     print(model)
 
