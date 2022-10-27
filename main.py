@@ -70,6 +70,13 @@ if __name__ == '__main__':
     parser.add_argument('--lambda_opacity', type=float, default=0, help="loss scale for alpha value")
     parser.add_argument('--lambda_orient', type=float, default=1e-2, help="loss scale for orientation")
 
+
+    ### stable training options
+    parser.add_argument('--clip_grad', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--clip_grad_val', default = 1.0, type=float, help="overwrite current experiment")
+    parser.add_argument('--init', default = None)
+    parser.add_argument('--normalization', type = str, default = 'No')
+    parser.add_argument('--WN', type = str, default = None)
     # ### GUI options
     parser.add_argument('--W', type=int, default=800, help="GUI width")
     parser.add_argument('--H', type=int, default=800, help="GUI height")
@@ -83,7 +90,8 @@ if __name__ == '__main__':
     ###Network options
     parser.add_argument('--num_layers', type=int, default=3, help="render width for NeRF in training")
     parser.add_argument('--hidden_dim', type=int, default=64, help="render width for NeRF in training")
-
+    parser.add_argument('--skip', action = 'store_true')
+    parser.add_argument('--bottleneck', action = 'store_true')
     ### Conditioning options
     parser.add_argument('--conditioning_model', type=str, default=None)
 
@@ -112,7 +120,7 @@ if __name__ == '__main__':
     else:
         wandb = None
     if opt.O:
-        opt.fp16 = True
+        opt.fp16 = False
         opt.dir_text = True
         # use occupancy grid to prune ray sampling, faster rendering.
         opt.cuda_ray = True
@@ -138,8 +146,10 @@ if __name__ == '__main__':
 
     seed_everything(opt.seed)
 
-    model = NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim)
-
+    if True:
+        model = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim), device_ids = [0])
+    else:
+        model = NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim)
     print(model)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -165,7 +175,7 @@ if __name__ == '__main__':
         else:
             raise NotImplementedError(f'--guidance {opt.guidance} is not implemented.')
 
-        optimizer = lambda model: torch.optim.Adam(model.get_params(opt.lr), betas=(0.9, 0.99), eps=1e-15)
+        optimizer = lambda model: torch.optim.Adam(model.module.get_params(opt.lr), betas=(0.9, 0.99), eps=1e-15)
         # optimizer = lambda model: Shampoo(model.get_params(opt.lr))
 
         train_loader = NeRFDataset(opt, device=device, type='train', H=opt.h, W=opt.w, size=100).dataloader()

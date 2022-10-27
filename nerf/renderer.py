@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import mcubes
 import raymarching
 from .utils import custom_meshgrid, safe_normalize
-
+from pdb import set_trace
 def sample_pdf(bins, weights, n_samples, det=False):
     # This implementation is from NeRF
     # bins: [B, T], old_z_vals
@@ -471,9 +471,12 @@ class NeRFRenderer(nn.Module):
             xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.bound, self.density_bitfield, self.cascade, self.grid_size, nears, fars, counter, self.mean_count, perturb, 128, force_all_rays, dt_gamma, max_steps)
 
             #plot_pointcloud(xyzs.reshape(-1, 3).detach().cpu().numpy())
-            
+            #from pdb import set_trace
             sigmas, rgbs, normals = self(xyzs, dirs, light_d, ratio=ambient_ratio, shading=shading)
 
+            #set_trace()
+            #replicas = nn.parallel.replicate(self,[0,1])
+            #inputs = nn.parallel.scatter() 
             #print(f'valid RGB query ratio: {mask.sum().item() / mask.shape[0]} (total = {mask.sum().item()})')
 
             weights_sum, depth, image = raymarching.composite_rays_train(sigmas, rgbs, deltas, rays, T_thresh)

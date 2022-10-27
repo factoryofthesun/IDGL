@@ -353,7 +353,7 @@ class Trainer(object):
         if self.opt.mem:
             torch.cuda.empty_cache()
             gc.collect()
-        outputs = self.model.render(rays_o, rays_d, staged=False, perturb=True, bg_color=bg_color, ambient_ratio=ambient_ratio, shading=shading, force_all_rays=True, **vars(self.opt))
+        outputs = self.model.module.render(rays_o, rays_d, staged=False, perturb=True, bg_color=bg_color, ambient_ratio=ambient_ratio, shading=shading, force_all_rays=True, **vars(self.opt))
         if self.opt.mem:
             torch.cuda.empty_cache()
             gc.collect() 
@@ -414,7 +414,7 @@ class Trainer(object):
         ambient_ratio = data['ambient_ratio'] if 'ambient_ratio' in data else 1.0
         light_d = data['light_d'] if 'light_d' in data else None
 
-        outputs = self.model.render(rays_o, rays_d, staged=True, perturb=False, bg_color=None, light_d=light_d, ambient_ratio=ambient_ratio, shading=shading, force_all_rays=True, **vars(self.opt))
+        outputs = self.model.module.render(rays_o, rays_d, staged=True, perturb=False, bg_color=None, light_d=light_d, ambient_ratio=ambient_ratio, shading=shading, force_all_rays=True, **vars(self.opt))
         pred_rgb = outputs['image'].reshape(B, H, W, 3)
         pred_depth = outputs['depth'].reshape(B, H, W)
         pred_ws = outputs['weights_sum'].reshape(B, H, W)
@@ -447,7 +447,7 @@ class Trainer(object):
         ambient_ratio = data['ambient_ratio'] if 'ambient_ratio' in data else 1.0
         light_d = data['light_d'] if 'light_d' in data else None
 
-        outputs = self.model.render(rays_o, rays_d, staged=True, perturb=perturb, light_d=light_d, ambient_ratio=ambient_ratio, shading=shading, force_all_rays=True, bg_color=bg_color, **vars(self.opt))
+        outputs = self.model.module.render(rays_o, rays_d, staged=True, perturb=perturb, light_d=light_d, ambient_ratio=ambient_ratio, shading=shading, force_all_rays=True, bg_color=bg_color, **vars(self.opt))
 
         pred_rgb = outputs['image'].reshape(B, H, W, 3)
         pred_depth = outputs['depth'].reshape(B, H, W)
@@ -695,9 +695,10 @@ class Trainer(object):
         for data in loader:
             
             # update grid every 16 steps
-            if self.model.cuda_ray and self.global_step % self.opt.update_extra_interval == 0:
+            if self.model.module.cuda_ray and self.global_step % self.opt.update_extra_interval == 0:
                 with torch.cuda.amp.autocast(enabled=self.fp16):
-                    self.model.update_extra_state()
+                    self.model.module.update_extra_state()
+
                     
             self.local_step += 1
             self.global_step += 1
@@ -707,9 +708,16 @@ class Trainer(object):
             with torch.cuda.amp.autocast(enabled=self.fp16):
                 pred_rgbs, pred_ws, loss = self.train_step(data)
          
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            if self.fp16:
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                loss.backward()
+                if self.opt.clip_grad:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.opt.clip_grad_val )
+                self.optimizer.step()
+            
 
             if self.scheduler_update_every_step:
                 self.lr_scheduler.step()
@@ -859,9 +867,9 @@ class Trainer(object):
             'stats': self.stats,
         }
 
-        if self.model.cuda_ray:
-            state['mean_count'] = self.model.mean_count
-            state['mean_density'] = self.model.mean_density
+        if self.model.module.cuda_ray:
+            state['mean_count'] = self.model.module.mean_count
+            state['mean_density'] = self.model.module.mean_density
 
         if full:
             state['optimizer'] = self.optimizer.state_dict()
@@ -872,7 +880,7 @@ class Trainer(object):
         
         if not best:
 
-            state['model'] = self.model.state_dict()
+            state['model'] = self.model.module.state_dict()
 
             file_path = f"{name}.pth"
 
@@ -896,7 +904,7 @@ class Trainer(object):
                         self.ema.store()
                         self.ema.copy_to()
 
-                    state['model'] = self.model.state_dict()
+                    state['model'] = self.model.module.state_dict()
 
                     if self.ema is not None:
                         self.ema.restore()

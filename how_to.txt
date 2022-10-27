@@ -8,4 +8,14 @@ python main.py --text pumpkin_text.txt --workspace trial -O --exp_name attribute
 
 #No conditioning (baseline)
 python main.py --text prompt.txt --workspace trial -O --exp_name attribute_CLIP --project_name object_name  --ckpt scratch --wandb_flag
-python main.py --text prompt.txt --workspace trial -O --exp_name attribute_CLIP --project_name object_name  --ckpt scratch --wandb_flag --num_layers 4 --hidden_dim 512 
+python main.py --text prompt.txt --workspace trial -O --exp_name attribute_CLIP --project_name object_name  --ckpt scratch --wandb_flag --num_layers 4 --hidden_dim 512
+
+
+python tune_network.py --texture yarn --object hamburger --num_prompts 1 --partition greg-gpu --skip  >> run_ham_s.sh" 
+. run_ham_s.sh
+
+python tune_network.py --texture avocado --object bottle --num_prompts 1 --partition greg-gpu --skip > run_bottle_s.sh
+. run_bottle_s.sh 
+
+python tune_network.py --texture yarn --object pumpkin --num_prompts 1 --partition dreamfields-gpu --skip > run_pumpkin_s.sh
+. run_pumpkin_s.sh 

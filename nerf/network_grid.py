@@ -13,35 +13,131 @@ from pdb import set_trace
 import clip
 import GPUtil
 import gc
+from torch.nn.utils import weight_norm as wn
+
 class MLP(nn.Module):
-    def __init__(self, dim_in, dim_out, dim_hidden, num_layers, nerf_conditioning = False, bias=True):
+    def __init__(self, dim_in, dim_out, dim_hidden, num_layers, nerf_conditioning = False, bias=True, init= None, opt= None):
         super().__init__()
         self.dim_in = dim_in
         self.dim_out = dim_out
         self.dim_hidden = dim_hidden
         self.num_layers = num_layers
         self.nerf_conditioning = nerf_conditioning
+        self.init = init
+        self.opt = opt
         net = []
 
+        if self.nerf_conditioning:
+            self.transform = nn.Sequential(nn.Linear(512, self.dim_hidden *2), nn.ReLU(), nn.Linear(self.dim_hidden*2, self.dim_hidden))
+
+        if opt is not None and 'LN' in opt.normalization :
+            self.layer_norm_list = nn.ModuleList()
 
         for l in range(num_layers):
             if self.nerf_conditioning:
-                net.append(nn.Linear(self.dim_in + 512  if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias))
+                net.append(nn.Linear(self.dim_in  if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias))
             else:
-                net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias))
+                if opt is not None and opt.bottleneck and num_layers >=5: 
+                    if l ==0:
+                        if opt.WN is None or 'not_first' in opt.WN :
+                            net.append(nn.Linear(self.dim_in, self.dim_hidden))
+                        else:
+                            net.append(wn(nn.Linear(self.dim_in, self.dim_hidden)) )
+                            
+                    elif l == num_layers - 3:
+                        net.append(nn.Linear(self.dim_hidden, self.dim_hidden//2))
+                    elif l == num_layers - 2:
+                        net.append(nn.Linear(self.dim_hidden//2, self.dim_hidden//4)) 
+                    elif l == num_layers - 1:
+                        if opt.WN is None or 'not_last' in opt.WN : 
+                            net.append(nn.Linear(self.dim_hidden//4,4))
+                        else:
+                            net.append(wn(nn.Linear(self.dim_hidden//4,4)))
+                    else:
+                        if opt.WN is not None:
+                            net.append(wn(nn.Linear(self.dim_hidden, self.dim_hidden)))
+                        else:
+                            net.append(nn.Linear(self.dim_hidden, self.dim_hidden))
+                else:
+                    if opt is not None and  opt.WN is not None:
+                        if l==0 and 'not_first' in opt.WN:
+                            net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias))
+                        elif l == num_layers -1 and 'not_last' in opt.WN : 
+                            net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)) 
+                        else:
+                            net.append(wn(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)))
+                    else:
+                        net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias))
+
+            if opt is not None and 'LN' in opt.normalization:
+                self.layer_norm_list.append(nn.LayerNorm(self.dim_hidden, elementwise_affine = True))
 
         self.net = nn.ModuleList(net)
+        if self.init is not None:
+            self.apply_init()
 
+    def apply_init(self):
+        
+        for ind, layer_ in enumerate(self.net):
+            if self.init == 'extend_ortho':
+                if ind >=3 and ind < self.num_layers -1:
+                    nn.init.orthogonal_(layer_.weight)
+                    if self.opt.WN:
+                        layer_.weight_g.data.fill_(1.0)
+            elif self.init == 'ortho':
+                if ind <self.num_layers -1:
+                    nn.init.orthogonal_(layer_.weight)
+                    if self.opt.WN :
+                        if not ('not_first' in self.opt.WN and ind ==0): 
+                            layer_.weight_g.data.fill_(1.0) 
+            elif self.init == 'extend_eye':
+                if ind >=3 and ind < self.num_layers -1:
+                    nn.init.eye_(layer_.weight)
+                    if self.opt.WN: 
+                        layer_.weight_g.data.fill_(1.0) 
+            elif self.init == 'eye':
+                if ind < self.num_layers -1:
+                    nn.init.eye_(layer_.weight)
+                    if self.opt.WN: 
+                        if not ('not_first' in self.opt.WN and ind ==0):
+                            layer_.weight_g.data.fill_(1.0) 
+            else:
+                print('maintain default')
+            #print('checking')
         
     def forward(self, x, conditioning_vector = None):
-
+        #print(x.device)
         for l in range(self.num_layers):
-            if l == 0:
-                if self.nerf_conditioning :
-                    x = torch.cat((x,conditioning_vector['input_vec'].repeat(x.shape[0],1)), dim=1)
+            # skip options                
+            #if l % 2 ==1 and l>1 and self.opt is not None and self.opt.skip:
+            #    x = x + x_skip 
+
+            #Pre-Normalization
+            if self.opt is not None and  l !=0 and self.opt.normalization == "pre_LN":
+                x = self.layer_norm_list[l](x)
+                
+            # conditioning options
+            if self.nerf_conditioning :
+                #x = torch.cat((x+self.transform(conditioning_vector['input_vec']).repeat(x.shape[0],1)), dim=1)
+                x = x+self.transform(conditioning_vector['input_vec']).repeat(x.shape[0],1)
+
+            # forward pass
             x = self.net[l](x)
+
+            #Post Normalization
+            if self.opt is not None and l != self.num_layers - 1 and self.opt.normalization == "post_LN":
+                x = self.layer_norm_list[l](x) 
+            # skip options
+            if l % 2 ==0 and l>1 and self.opt is not None and self.opt.skip:
+                x = x + x_skip
+
+            # Activation
             if l != self.num_layers - 1:
                 x = F.relu(x, inplace=True)
+            
+            # store for skip 
+            if l %2 == 0:
+                x_skip = x
         return x
 
 
@@ -84,8 +180,8 @@ class NeRFNetwork(NeRFRenderer):
 
         self.encoder, self.in_dim = get_encoder('tiledgrid', input_dim=3, desired_resolution=2048 * self.bound)
 
-        self.sigma_net = MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True)
-
+        self.sigma_net = nn.DataParallel(MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True, init= opt.init, opt = opt))
+        #self.sigma_net = MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True)
         # background network
         if self.bg_radius > 0:
             self.num_layers_bg = num_layers_bg   
@@ -149,6 +245,7 @@ class NeRFNetwork(NeRFRenderer):
             gc.collect() 
         h = self.encoder(x, bound=self.bound)
 
+
         h = self.sigma_net(h, conditioning_vector = self.conditioning_vector)
 
         sigma = trunc_exp(h[..., 0] + self.gaussian(x))
@@ -181,7 +278,7 @@ class NeRFNetwork(NeRFRenderer):
         # d: [N, 3], view direction, nomalized in [-1, 1]
         # l: [3], plane light direction, nomalized in [-1, 1]
         # ratio: scalar, ambient ratio, 1 == no shading (albedo only), 0 == only shading (textureless)
-
+        #set_trace()
         if shading == 'albedo':
             # no need to query normal
             sigma, color = self.common_forward(x)
