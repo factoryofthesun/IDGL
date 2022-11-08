@@ -14,9 +14,32 @@ import clip
 import GPUtil
 import gc
 from torch.nn.utils import weight_norm as wn
+import math
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.enabled = True
+
+
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model = 32, max_len= 6):
+        super().__init__()
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self):
+        """
+        Args:
+            x: Tensor, shape [seq_len, batch_size, embedding_dim]
+        """
+        return self.pe
 
 class MLP(nn.Module):
-    def __init__(self, dim_in, dim_out, dim_hidden, num_layers, nerf_conditioning = False, bias=True, init= None, opt= None):
+    def __init__(self, dim_in, dim_out, dim_hidden, num_layers, nerf_conditioning = False, bias=True, init= None, opt= None, wandb_obj = None):
         super().__init__()
         self.dim_in = dim_in
         self.dim_out = dim_out
@@ -25,18 +48,39 @@ class MLP(nn.Module):
         self.nerf_conditioning = nerf_conditioning
         self.init = init
         self.opt = opt
+        self.wandb_obj = wandb_obj
         net = []
 
         if self.nerf_conditioning:
-            self.transform = nn.Sequential(nn.Linear(512, self.dim_hidden *2), nn.ReLU(), nn.Linear(self.dim_hidden*2, self.dim_hidden))
+            if self.opt.conditioning_mode == 'sum' or self.opt.conditioning_dim ==0:
+                transform_dim = self.dim_hidden
+            else:
+                transform_dim = opt.conditioning_dim 
+
+            if opt.multiple_conditioning_transformers:
+                self.transform_list = nn.ModuleList()
+                for i in range(num_layers):
+                
+                    self.transform_list.append(nn.Sequential(wn(nn.Linear(512, self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim))))
+                    self.apply_init(model = self.transform_list[i], init='ortho')
+
+            else:
+                #self.transform = nn.Sequential(wn(nn.Linear(512+512 , self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))
+                #self.transform = nn.Sequential(wn(nn.Linear(512 , self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))
+                self.transform = nn.Linear(512,transform_dim)
+                nn.init.orthogonal_(self.transform.weight) 
+                #self.apply_init(model = self.transform, init='ortho')
+                self.layer_id_encoder = PositionalEncoding(d_model = 512, max_len = num_layers)
+                self.layer_index = self.layer_id_encoder().cuda()
 
         if opt is not None and 'LN' in opt.normalization :
             self.layer_norm_list = nn.ModuleList()
 
         for l in range(num_layers):
-            if self.nerf_conditioning:
-                net.append(nn.Linear(self.dim_in  if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias))
-            else:
+            #if self.nerf_conditioning:
+           
+            #net.append(nn.Linear(self.dim_in  if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias))
+            if True : #self.nerf_conditioning:
                 if opt is not None and opt.bottleneck and num_layers >=5: 
                     if l ==0:
                         if opt.WN is None or 'not_first' in opt.WN :
@@ -65,9 +109,27 @@ class MLP(nn.Module):
                         elif l == num_layers -1 and 'not_last' in opt.WN : 
                             net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)) 
                         else:
-                            net.append(wn(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)))
+                            if opt.pos_enc_ins == 0:
+                                opt.pos_enc_ins = num_layers +1
+                            inp_dim_aug_dim = 0
+                            if l % opt.pos_enc_ins  ==0 and l!=0:
+                                 
+                                inp_dim_aug_dim = inp_dim_aug_dim + 32
+                                #net.append(wn(nn.Linear(self.dim_in  if l == 0 else self.dim_hidden+32, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)))
+                            
+                            if self.nerf_conditioning:
+
+                                if l ==0:
+                                    inp_dim_aug_dim =  0#transform_dim
+                                elif self.opt.conditioning_mode == 'cat' and (l ==2 or l==3 or l==4):
+                                    inp_dim_aug_dim = inp_dim_aug_dim + transform_dim
+                                
+
+                            net.append(wn(nn.Linear(self.dim_in + inp_dim_aug_dim if l == 0 else self.dim_hidden + inp_dim_aug_dim, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)))
                     else:
                         net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias))
+            else:
+                net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)) 
 
             if opt is not None and 'LN' in opt.normalization:
                 self.layer_norm_list.append(nn.LayerNorm(self.dim_hidden, elementwise_affine = True))
@@ -76,26 +138,32 @@ class MLP(nn.Module):
         if self.init is not None:
             self.apply_init()
 
-    def apply_init(self):
-        
-        for ind, layer_ in enumerate(self.net):
-            if self.init == 'extend_ortho':
+    def apply_init(self, model =None,init =None):
+        if model is None:
+            model = self.net
+        if init is None:
+            init = self.init
+
+        for ind, layer_ in enumerate(model):
+            if type(layer_) == type(nn.ReLU()):
+                continue
+            if init == 'extend_ortho':
                 if ind >=3 and ind < self.num_layers -1:
                     nn.init.orthogonal_(layer_.weight)
                     if self.opt.WN:
                         layer_.weight_g.data.fill_(1.0)
-            elif self.init == 'ortho':
+            elif init == 'ortho':
                 if ind <self.num_layers -1:
                     nn.init.orthogonal_(layer_.weight)
                     if self.opt.WN :
                         if not ('not_first' in self.opt.WN and ind ==0): 
                             layer_.weight_g.data.fill_(1.0) 
-            elif self.init == 'extend_eye':
+            elif init == 'extend_eye':
                 if ind >=3 and ind < self.num_layers -1:
                     nn.init.eye_(layer_.weight)
                     if self.opt.WN: 
                         layer_.weight_g.data.fill_(1.0) 
-            elif self.init == 'eye':
+            elif init == 'eye':
                 if ind < self.num_layers -1:
                     nn.init.eye_(layer_.weight)
                     if self.opt.WN: 
@@ -104,9 +172,14 @@ class MLP(nn.Module):
             else:
                 print('maintain default')
             #print('checking')
+        #set_trace()
         
-    def forward(self, x, conditioning_vector = None):
-        #print(x.device)
+    def forward(self, x, conditioning_vector = None,epoch = None):
+        #print(x.device)i
+        x = x/x.norm(dim=1).unsqueeze(dim=1)
+        pos_enc = x
+        #if epoch ==11:
+        #    set_trace()
         for l in range(self.num_layers):
             # skip options                
             #if l % 2 ==1 and l>1 and self.opt is not None and self.opt.skip:
@@ -117,10 +190,39 @@ class MLP(nn.Module):
                 x = self.layer_norm_list[l](x)
                 
             # conditioning options
-            if self.nerf_conditioning :
-                #x = torch.cat((x+self.transform(conditioning_vector['input_vec']).repeat(x.shape[0],1)), dim=1)
-                x = x+self.transform(conditioning_vector['input_vec']).repeat(x.shape[0],1)
+            if self.nerf_conditioning  and (l ==2 or l ==3 or l ==4  ):
 
+                #x = torch.cat((x+self.transform(conditioning_vector['input_vec']).repeat(x.shape[0],1)), dim=1)
+                if self.opt.multiple_conditioning_transformers:
+                    transformer = self.transform_list[l]
+                    proj_cond_vec = transformer(conditioning_vector['input_vec'])
+                else:
+                    layer_id_enc_vec = self.layer_index[l]
+                    layer_id_enc_vec = layer_id_enc_vec/layer_id_enc_vec.norm()
+                    cond_vec_with_pos_enc = conditioning_vector['input_vec'] #torch.cat((conditioning_vector['input_vec'],layer_id_enc_vec), dim=1)
+                    proj_cond_vec = self.transform(cond_vec_with_pos_enc)
+                    
+
+                #print(self.transform[0].weight.norm())
+                proj_cond_vec = torch.nn.functional.layer_norm(proj_cond_vec, (64,))
+                proj_cond_vec = proj_cond_vec /proj_cond_vec.norm().detach()
+                #proj_cond_vec = proj_cond_vec *1
+                if  l==0 or self.opt.conditioning_mode == 'cat'  :
+                    #if self.opt.wandb_flag:
+                    #   self.wandb_obj.log({'act_norm_{}'.format(l):x[0].norm()}) 
+                    #   self.wandb_obj.log({'cond_norm_{}'.format(l):proj_cond_vec.norm()})i
+                    #x = x/x.norm(dim=1).unsqueeze(dim=1)
+                    #proj_cond_vec = proj_cond_vec / proj_cond_vec.norm()
+                    x = torch.cat((x,proj_cond_vec.repeat(x.shape[0],1)), dim=1)
+                else:
+                    #if self.opt.wandb_flag:
+                    #   self.wandb_obj.log({'act_norm_{}'.format(l):x[0].norm()})
+                    #   self.wandb_obj.log({'cond_norm_{}'.format(l):proj_cond_vec.norm()})
+                    
+                    x = x +  proj_cond_vec.repeat(x.shape[0],1)    #self.transform(conditioning_vector['input_vec']).repeat(x.shape[0],1)
+                    
+            if self.opt is not None and l%self.opt.pos_enc_ins ==0 and l!=0:
+                x = torch.cat((x,pos_enc), dim=1)
             # forward pass
             x = self.net[l](x)
 
@@ -128,7 +230,7 @@ class MLP(nn.Module):
             if self.opt is not None and l != self.num_layers - 1 and self.opt.normalization == "post_LN":
                 x = self.layer_norm_list[l](x) 
             # skip options
-            if l % 2 ==0 and l>1 and self.opt is not None and self.opt.skip:
+            if l % 2 ==0 and l>1 and self.opt is not None and self.opt.skip and l != self.num_layers-1:
                 x = x + x_skip
 
             # Activation
@@ -148,6 +250,7 @@ class NeRFNetwork(NeRFRenderer):
                  hidden_dim=64,
                  num_layers_bg=2,
                  hidden_dim_bg=64,
+                 wandb_obj = None,
                  ):
         
         super().__init__(opt)
@@ -174,13 +277,18 @@ class NeRFNetwork(NeRFRenderer):
             self.nerf_conditioning = False 
 
         if self.nerf_conditioning:
-            self.conditioning_vector = self.get_conditioning_vec()
+            with torch.no_grad():
+                self.conditioning_vector = self.get_conditioning_vec()
+            del self.text_model_tokenizer
+            self.text_model_tokenizer = None
+            gc.collect()
+            torch.cuda.empty_cache()
         else:
             self.conditioning_vector = None
 
         self.encoder, self.in_dim = get_encoder('tiledgrid', input_dim=3, desired_resolution=2048 * self.bound)
 
-        self.sigma_net = nn.DataParallel(MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True, init= opt.init, opt = opt))
+        self.sigma_net = nn.DataParallel(MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True, init= opt.init, opt = opt, wandb_obj = wandb_obj))
         #self.sigma_net = MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True)
         # background network
         if self.bg_radius > 0:
@@ -206,6 +314,7 @@ class NeRFNetwork(NeRFRenderer):
             text_token = clip.tokenize(ref_text).to('cuda')
             with torch.no_grad():
                 conditioning_tokens = self.clip_model.encode_text(text_token)
+            set_trace()
             conditioning_tokens = conditioning_tokens/ conditioning_tokens.norm(dim=-1, keepdim =True)
             conditioning_vector['input_vec']  = conditioning_tokens
             conditioning_vector['input_tokens'] = conditioning_tokens
@@ -245,8 +354,13 @@ class NeRFNetwork(NeRFRenderer):
             gc.collect() 
         h = self.encoder(x, bound=self.bound)
 
-
-        h = self.sigma_net(h, conditioning_vector = self.conditioning_vector)
+        #cur_mem = torch.cuda.memory_allocated() * 1e-9 
+        #max_mem = torch.cuda.max_memory_allocated() * 1e-9 
+        #print(cur_mem/max_mem)
+        #print(h.shape)
+        #if self.sigma_net.epoch == 11:
+        #    set_trace()
+        h = self.sigma_net(h, conditioning_vector = self.conditioning_vector, epoch = self.sigma_net.epoch)
 
         sigma = trunc_exp(h[..., 0] + self.gaussian(x))
         albedo = torch.sigmoid(h[..., 1:])
@@ -278,7 +392,6 @@ class NeRFNetwork(NeRFRenderer):
         # d: [N, 3], view direction, nomalized in [-1, 1]
         # l: [3], plane light direction, nomalized in [-1, 1]
         # ratio: scalar, ambient ratio, 1 == no shading (albedo only), 0 == only shading (textureless)
-        #set_trace()
         if shading == 'albedo':
             # no need to query normal
             sigma, color = self.common_forward(x)
@@ -286,7 +399,7 @@ class NeRFNetwork(NeRFRenderer):
         
         else:
             # query normal
-
+            set_trace()
             sigma, albedo = self.common_forward(x)
             normal = self.finite_difference_normal(x)
 
