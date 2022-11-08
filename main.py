@@ -6,6 +6,8 @@ from nerf.utils import *
 from optimizer import Shampoo
 import wandb
 from pdb import set_trace
+torch.backends.cudnn.enabled = True 
+torch.backends.cudnn.benchmark = True
 # from nerf.gui import NeRFGUI
 
 # torch.autograd.set_detect_anomaly(True)
@@ -90,12 +92,15 @@ if __name__ == '__main__':
     ###Network options
     parser.add_argument('--num_layers', type=int, default=3, help="render width for NeRF in training")
     parser.add_argument('--hidden_dim', type=int, default=64, help="render width for NeRF in training")
+    parser.add_argument('--pos_enc_ins', type=int, default=0, help="render width for NeRF in training")
     parser.add_argument('--skip', action = 'store_true')
     parser.add_argument('--bottleneck', action = 'store_true')
+    parser.add_argument('--arch', type = str, default='mlp')
     ### Conditioning options
     parser.add_argument('--conditioning_model', type=str, default=None)
-
-
+    parser.add_argument('--conditioning_mode', type=str, default='sum')
+    parser.add_argument('--conditioning_dim', type = int, default = 0 )
+    parser.add_argument('--multiple_conditioning_transformers', action = 'store_true')
     #### Other option
     parser.add_argument('--mem', action='store_true', help="overwrite current experiment")
     # parser.add_argument('--radius', type=float, default=3, help="default GUI camera radius from center")
@@ -145,9 +150,11 @@ if __name__ == '__main__':
     print(opt)
 
     seed_everything(opt.seed)
+    if opt.arch == 'hyper_transformer':
+       from nerf.hyper_network_grid import HyperTransNeRFNetwork as NeRFNetwork
 
     if True:
-        model = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim), device_ids = [0])
+        model = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim,wandb_obj=wandb ), device_ids = [0])
     else:
         model = NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim)
     print(model)
