@@ -199,13 +199,16 @@ class MLP(nn.Module):
         #print(x.device)i
         x = x/x.norm(dim=1).unsqueeze(dim=1) #* 10
         pos_enc = x
+        if conditioning_vector is not None:
+            scene_id = self.scene_id
         #if epoch ==11:
-        #    set_trace()
         if self.hyper_flag:# and conditioning_vector is not None:
             if conditioning_vector is None:
                 params = self.hyper_transformer(self.hyper_inp)
             else:
-                params = self.hyper_transformer(self.transform(conditioning_vector['input_vec']))
+                processed_tokens = self.transform(conditioning_vector[scene_id]['input_tokens'].squeeze(0))
+                #processed_tokens = processed_tokens.unsqueeze(0)
+                params = self.hyper_transformer(processed_tokens)
             #self.set_params(params)
 
         for l in range(self.num_layers):
@@ -223,11 +226,15 @@ class MLP(nn.Module):
                 #x = torch.cat((x+self.transform(conditioning_vector['input_vec']).repeat(x.shape[0],1)), dim=1)
                 if self.opt.multiple_conditioning_transformers:
                     transformer = self.transform_list[l]
-                    proj_cond_vec = transformer(conditioning_vector['input_vec'])
+                    #set_trace()
+                    proj_cond_vec = transformer(conditioning_vector[scene_id]['input_vec'])
                 else:
                     layer_id_enc_vec = self.layer_index[l]
                     layer_id_enc_vec = layer_id_enc_vec/layer_id_enc_vec.norm()
-                    cond_vec_with_pos_enc = conditioning_vector['input_vec'] #torch.cat((conditioning_vector['input_vec'],layer_id_enc_vec), dim=1)
+                    cond_vec_with_pos_enc = conditioning_vector[scene_id]['input_vec'] #torch.cat((conditioning_vector['input_vec'],layer_id_enc_vec), dim=1)
+                    if scene_id == 0:
+                        print(cond_vec_with_pos_enc)
+                        #set_trace()
                     proj_cond_vec = self.transform(cond_vec_with_pos_enc)
                     
 
@@ -298,23 +305,30 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             self.nerf_conditioning = True
         elif opt.conditioning_model == 'T5':
             from transformers import AutoTokenizer, AutoModelWithLMHead
-            self.text_model_tokenizer = AutoTokenizer.from_pretrained("t5-small")
-            self.text_model = AutoModelWithLMHead.from_pretrained("t5-small").cuda()
+            import os
+            os.environ['TRANSFORMERS_CACHE'] = './cache'
+            self.text_model_tokenizer = AutoTokenizer.from_pretrained("t5-small", cache_dir = "./cache")
+            self.text_model = AutoModelWithLMHead.from_pretrained("t5-small", cache_dir = "./cache").cuda()
             
             for parameters in self.text_model.parameters():
-                parameters.requires_grad = False
+                parameters.requires_grad = True
             self.nerf_conditioning = True
  
         elif opt.conditioning_model is None:
             self.nerf_conditioning = False 
 
         if self.nerf_conditioning:
-            with torch.no_grad():
-                self.conditioning_vector = self.get_conditioning_vec()
-            del self.text_model_tokenizer
-            self.text_model_tokenizer = None
-            gc.collect()
-            torch.cuda.empty_cache()
+            #with torch.no_grad():
+                
+            self.conditioning_vector = {}
+            for idx, val in enumerate(self.opt.text):
+               set_trace()
+               current_emb  = self.get_conditioning_vec(idx)
+               self.conditioning_vector[idx] = current_emb
+            #del self.text_model_tokenizer
+            #self.text_model_tokenizer = None
+            #gc.collect()
+            #torch.cuda.empty_cache()
         else:
             self.conditioning_vector = None
 
@@ -346,7 +360,6 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             text_token = clip.tokenize(ref_text).to('cuda')
             with torch.no_grad():
                 conditioning_tokens = self.clip_model.encode_text(text_token)
-            set_trace()
             conditioning_tokens = conditioning_tokens/ conditioning_tokens.norm(dim=-1, keepdim =True)
             conditioning_vector['input_vec']  = conditioning_tokens
             conditioning_vector['input_tokens'] = conditioning_tokens
@@ -356,18 +369,30 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             conditioning_vector = {}
             #if self.opt.dir_text:
             #    print('not implemented')
+            #self.text_model.eval()
             text_token =torch.tensor(self.text_model_tokenizer([ref_text])['input_ids']).to('cuda')
+            set_trace()
             decoder_input_ids = self.text_model_tokenizer("dummy text to be ignored", return_tensors="pt").input_ids.cuda()
-            if False: #TODO change later sud
+            self.text_token = text_token
+            self.decoder_input_ids = decoder_input_ids
+            if True: #TODO change later sud
                 conditioning_tokens = self.text_model(text_token, decoder_input_ids = decoder_input_ids)['encoder_last_hidden_state']
             else:
                 with torch.no_grad():
                     conditioning_tokens = self.text_model(text_token, decoder_input_ids = decoder_input_ids)['encoder_last_hidden_state']
+            if index == 0:
+                print(conditioning_tokens.norm())
             conditioning_vector['input_vec'] = conditioning_tokens.mean(dim=1)/conditioning_tokens.mean(dim=1).norm(dim=-1, keepdim=True)
             conditioning_vector['input_tokens'] = conditioning_tokens/conditioning_tokens.norm(dim=-1, keepdim = True )
         return conditioning_vector    
 
-
+    '''
+    def __getattr__(self,name):
+        if name in [self.get_conditioning_vec]:
+            return getattr(self.module, name)
+        else:
+            return super().__getattr__(name)
+    '''
     # add a density blob to the scene center
     def gaussian(self, x):
         # x: [B, N, 3]
@@ -376,6 +401,7 @@ class HyperTransNeRFNetwork(NeRFRenderer):
         g = 5 * torch.exp(-d / (2 * 0.2 ** 2))
 
         return g
+       
 
     def common_forward(self, x):
         # x: [N, 3], in [-bound, bound]
@@ -391,7 +417,12 @@ class HyperTransNeRFNetwork(NeRFRenderer):
         #print(cur_mem/max_mem)
         #print(h.shape)
         #if self.sigma_net.epoch == 11:
-        #    set_trace()
+        self.sigma_net.module.scene_id = self.scene_id 
+        set_trace()
+        temp = self.get_conditioning_vec(index = self.scene_id)
+ 
+        self.conditioning_vector[self.scene_id]  = temp
+        set_trace()
         h = self.sigma_net(h, conditioning_vector = self.conditioning_vector, epoch = self.sigma_net.epoch)
 
         sigma = trunc_exp(h[..., 0] + self.gaussian(x))
@@ -482,10 +513,10 @@ class HyperTransNeRFNetwork(NeRFRenderer):
 
     # optimizer utils
     def get_params(self, lr):
-
         params = [
             {'params': self.encoder.parameters(), 'lr': lr * 10},
             {'params': self.sigma_net.parameters(), 'lr': lr},
+            {'params': list(self.text_model.parameters())[-14:], 'lr': lr *10}
         ]        
 
         if self.bg_radius > 0:
