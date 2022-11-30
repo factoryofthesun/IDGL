@@ -75,6 +75,7 @@ if __name__ == '__main__':
 
     ### stable training options
     parser.add_argument('--clip_grad', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--fine_tune_conditioner', action='store_true', help="overwrite current experiment")
     parser.add_argument('--clip_grad_val', default = 1.0, type=float, help="overwrite current experiment")
     parser.add_argument('--init', default = None)
     parser.add_argument('--normalization', type = str, default = 'No')
@@ -100,6 +101,7 @@ if __name__ == '__main__':
     parser.add_argument('--conditioning_model', type=str, default=None)
     parser.add_argument('--conditioning_mode', type=str, default='sum')
     parser.add_argument('--conditioning_dim', type = int, default = 0 )
+    parser.add_argument('--meta_batch_size', type = int, default = 1)
     parser.add_argument('--multiple_conditioning_transformers', action = 'store_true')
     #### Other option
     parser.add_argument('--mem', action='store_true', help="overwrite current experiment")
@@ -115,13 +117,13 @@ if __name__ == '__main__':
     lines = [line.replace("\n", "") for line in lines]
     opt.text = lines
     print(opt.text)
-
     opt.workspace = os.path.join("outputs", opt.project_name+'_'+opt.exp_name)
     if opt.overwrite and os.path.exists(opt.workspace): 
         clear_directory(opt.workspace)
-        
+       
     if opt.wandb_flag:
-        wandb.init(project = opt.project_name,config = opt, resume = opt.ckpt is 'latest', name = opt.exp_name)
+        resume_flag = opt.ckpt == 'latest'
+        wandb.init(project = opt.project_name,config = opt, resume = True, name = opt.exp_name, id = opt.exp_name)
     else:
         wandb = None
     if opt.O:
@@ -157,7 +159,7 @@ if __name__ == '__main__':
         model = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim,wandb_obj=wandb ), device_ids = [0])
     else:
         model = NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim)
-    print(model)
+    #print(model)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -196,6 +198,7 @@ if __name__ == '__main__':
 
         max_epoch = np.ceil(opt.iters / len(train_loader)).astype(np.int32)
         test_loader = NeRFDataset(opt, device=device, type='test', H=opt.H, W=opt.W, size=100).dataloader()
+
         trainer.train(train_loader, valid_loader,test_loader, max_epoch)
 
         # also test

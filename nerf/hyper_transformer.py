@@ -52,7 +52,7 @@ class TransInr(nn.Module):
     def forward(self, data):
         #TODO change tokens
         dtokens = data #self.tokenizer(data)
-        B = dtokens.shape[0]
+        B = 1#dtokens.shape[0]
         dtokens = einops.repeat(dtokens, 'n d -> b n d', b=B)
         wtokens = einops.repeat(self.wtokens, 'n d -> b n d', b=B)
         trans_out = self.transformer_encoder(torch.cat([dtokens, wtokens], dim=1))
@@ -63,13 +63,13 @@ class TransInr(nn.Module):
             wb = einops.repeat(self.base_params[name], 'n m -> b n m', b=B)
             #w, b = wb[:, :-1, :], wb[:, -1:, :]
             w = wb
-
             l, r = self.wtoken_rng[name]
             x = self.wtoken_postfc[name](trans_out[:, l: r, :])
             x = x.transpose(-1, -2) # (B, shape[0] - 1, g)
             w = F.normalize(w * x.repeat(1, 1, w.shape[2] // x.shape[2]), dim=1)
 
             wb = w#torch.cat([w, b], dim=1)
+            
             params[name] = wb.squeeze(0)
         return params
         #self.hyponet.set_params(params)

@@ -78,7 +78,10 @@ class MLP(nn.Module):
             else:
                 #self.transform = nn.Sequential(wn(nn.Linear(512+512 , self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))
                 #self.transform = nn.Sequential(wn(nn.Linear(512 , self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))
-                self.transform = nn.Linear(512,transform_dim)
+                if self.opt.conditioning_model == 'bert':
+                    self.transform = nn.Linear(768,transform_dim)
+                else:
+                    self.transform = nn.Linear(512,transform_dim)
                 nn.init.orthogonal_(self.transform.weight) 
                 #self.apply_init(model = self.transform, init='ortho')
                 self.layer_id_encoder = PositionalEncoding(d_model = transform_dim, max_len = num_layers)
@@ -232,8 +235,8 @@ class MLP(nn.Module):
                     layer_id_enc_vec = self.layer_index[l]
                     layer_id_enc_vec = layer_id_enc_vec/layer_id_enc_vec.norm()
                     cond_vec_with_pos_enc = conditioning_vector[scene_id]['input_vec'] #torch.cat((conditioning_vector['input_vec'],layer_id_enc_vec), dim=1)
-                    if scene_id == 0:
-                        print(cond_vec_with_pos_enc)
+                    #if scene_id == 0:
+                    #    print(cond_vec_with_pos_enc)
                         #set_trace()
                     proj_cond_vec = self.transform(cond_vec_with_pos_enc)
                     
@@ -303,13 +306,34 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             for parameters in self.clip_model.parameters():
                 parameters.requires_grad = False
             self.nerf_conditioning = True
+        elif opt.conditioning_model == 'bert':
+            from transformers import AutoTokenizer, AutoModel
+            self.text_model_tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/bert-base-nli-mean-tokens', cache_dir = "./local_dir")
+            self.text_model = AutoModel.from_pretrained('sentence-transformers/bert-base-nli-mean-tokens',cache_dir = "./local_dir").cuda()
+            for parameters in list(self.text_model.parameters()):
+                parameters.requires_grad = False
+
+            if self.opt.fine_tune_conditioner:
+                for parameters in list(self.text_model.parameters())[-34:-2]:
+                    parameters.requires_grad = True
+                    
+            self.nerf_conditioning = True
+
         elif opt.conditioning_model == 'T5':
+            #from transformers import T5Tokenizer, T5EncoderModel, T5Model
+
+            #self.text_model_tokenizer = T5Tokenizer.from_pretrained("t5-small", cache_dir = "./local_cache")
+            #self.text_model = T5Model.from_pretrained("t5-small", cache_dir = "./local_cache")
+
+            #input_ids = tokenizer("Studies have been shown that owning a dog is good for you", return_tensors="pt").input_ids  # Batch size 1
+            #outputs = model(input_ids=input_ids)
+            #last_hidden_states = outputs.last_hidden_state
+
             from transformers import AutoTokenizer, AutoModelWithLMHead
             import os
             os.environ['TRANSFORMERS_CACHE'] = './cache'
             self.text_model_tokenizer = AutoTokenizer.from_pretrained("t5-small", cache_dir = "./cache")
             self.text_model = AutoModelWithLMHead.from_pretrained("t5-small", cache_dir = "./cache").cuda()
-            
             for parameters in self.text_model.parameters():
                 parameters.requires_grad = True
             self.nerf_conditioning = True
@@ -322,7 +346,6 @@ class HyperTransNeRFNetwork(NeRFRenderer):
                 
             self.conditioning_vector = {}
             for idx, val in enumerate(self.opt.text):
-               set_trace()
                current_emb  = self.get_conditioning_vec(idx)
                self.conditioning_vector[idx] = current_emb
             #del self.text_model_tokenizer
@@ -371,19 +394,41 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             #    print('not implemented')
             #self.text_model.eval()
             text_token =torch.tensor(self.text_model_tokenizer([ref_text])['input_ids']).to('cuda')
-            set_trace()
             decoder_input_ids = self.text_model_tokenizer("dummy text to be ignored", return_tensors="pt").input_ids.cuda()
             self.text_token = text_token
             self.decoder_input_ids = decoder_input_ids
-            if True: #TODO change later sud
+            if False: #TODO change later sud
                 conditioning_tokens = self.text_model(text_token, decoder_input_ids = decoder_input_ids)['encoder_last_hidden_state']
             else:
                 with torch.no_grad():
                     conditioning_tokens = self.text_model(text_token, decoder_input_ids = decoder_input_ids)['encoder_last_hidden_state']
-            if index == 0:
-                print(conditioning_tokens.norm())
             conditioning_vector['input_vec'] = conditioning_tokens.mean(dim=1)/conditioning_tokens.mean(dim=1).norm(dim=-1, keepdim=True)
             conditioning_vector['input_tokens'] = conditioning_tokens/conditioning_tokens.norm(dim=-1, keepdim = True )
+        
+        elif self.conditioning_model == 'bert':
+            def mean_pooling(model_output, attention_mask):
+                token_embeddings = model_output[0] #First element of model_output contains all token embeddings
+                input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+                return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+
+            ref_text = self.opt.text[index]
+            conditioning_vector = {}     
+             
+            text_token = self.text_model_tokenizer(ref_text, padding=True, truncation=True, return_tensors='pt')
+            text_token['input_ids'] = text_token['input_ids'].cuda()
+            text_token['token_type_ids'] = text_token['token_type_ids'].cuda()
+            text_token['attention_mask'] = text_token['attention_mask'].cuda()
+            if self.opt.fine_tune_conditioner:
+                model_output = self.text_model(**text_token)
+            else:
+                with torch.no_grad():
+                    model_output = self.text_model(**text_token)
+            conditioning_tokens = model_output[0]
+            
+            inp_vec = mean_pooling(model_output, text_token['attention_mask'])
+            conditioning_vector['input_vec']  = inp_vec/inp_vec.norm(dim=-1, keepdim=True)
+            conditioning_vector['input_tokens'] = conditioning_tokens/conditioning_tokens.norm(dim=-1, keepdim = True )           
+
         return conditioning_vector    
 
     '''
@@ -418,11 +463,9 @@ class HyperTransNeRFNetwork(NeRFRenderer):
         #print(h.shape)
         #if self.sigma_net.epoch == 11:
         self.sigma_net.module.scene_id = self.scene_id 
-        set_trace()
         temp = self.get_conditioning_vec(index = self.scene_id)
  
         self.conditioning_vector[self.scene_id]  = temp
-        set_trace()
         h = self.sigma_net(h, conditioning_vector = self.conditioning_vector, epoch = self.sigma_net.epoch)
 
         sigma = trunc_exp(h[..., 0] + self.gaussian(x))
@@ -462,7 +505,6 @@ class HyperTransNeRFNetwork(NeRFRenderer):
         
         else:
             # query normal
-            set_trace()
             sigma, albedo = self.common_forward(x)
             normal = self.finite_difference_normal(x)
 
@@ -516,7 +558,7 @@ class HyperTransNeRFNetwork(NeRFRenderer):
         params = [
             {'params': self.encoder.parameters(), 'lr': lr * 10},
             {'params': self.sigma_net.parameters(), 'lr': lr},
-            {'params': list(self.text_model.parameters())[-14:], 'lr': lr *10}
+            {'params': list(self.text_model.parameters())[-34: -2], 'lr': lr }
         ]        
 
         if self.bg_radius > 0:

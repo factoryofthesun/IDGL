@@ -33,6 +33,9 @@ from pdb import set_trace
 import GPUtil
 import gc
 
+torch.backends.cudnn.benchmark = True    
+torch.backends.cudnn.enabled = True 
+
 def to8b(x):
     return (255*np.clip(x,0,1)).astype(np.uint8)
 
@@ -207,7 +210,9 @@ class Trainer(object):
 
         # text prompt
         #ref_text = ' '.join(self.opt.text)
-        ref_text = self.opt.text[0]
+        ref_text={}
+        for idx, val in enumerate(self.opt.text):
+            ref_text[idx] = self.opt.text[idx]
         model.to(self.device)
         if self.world_size > 1:
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -223,18 +228,23 @@ class Trainer(object):
             for p in self.guidance.parameters():
                 p.requires_grad = False
 
-            if not self.opt.dir_text:
-                self.text_z = self.guidance.get_text_embeds([ref_text])
-            else:
-                self.text_z = []
-                for d in ['front', 'side', 'back', 'side', 'overhead', 'bottom']:
-                    text = f"{ref_text}, {d} view"
-                    text_z = self.guidance.get_text_embeds([text])
-                    self.text_z.append(text_z)
+            self.text_z = {}
+            for idx, val in enumerate(self.opt.text):
+                current_text = ref_text[idx]
+                if not self.opt.dir_text:
+                    self.text_z[idx] = self.guidance.get_text_embeds([ref_text[idx]])
+                else:
+                    text_z_list = []
+                    for d in ['front', 'side', 'back', 'side', 'overhead', 'bottom']:
+                        text = f"{current_text}, {d} view"
+                        #print(text)
+                        text_z = self.guidance.get_text_embeds([text])
+                        text_z_list.append(text_z)
+                        self.text_z[idx] = text_z_list
         
         else:
             self.text_z = None
-    
+ 
         if isinstance(criterion, nn.Module):
             criterion.to(self.device)
         self.criterion = criterion
@@ -322,7 +332,20 @@ class Trainer(object):
 
     ### ------------------------------	
 
-    def train_step(self, data):
+    def train_step(self, data,scene_id):
+        #cur_mem = torch.cuda.memory_allocated() * 1e-9
+        #max_mem = torch.cuda.max_memory_allocated() * 1e-9
+        #print('\n  {}'.format(cur_mem/max_mem))
+        #print(dict(self.model.module.text_model.named_parameters())['decoder.block.5.layer.0.SelfAttention.v.weight'].norm())
+        #print(dict(self.model.module.sigma_net.named_parameters())['module.hyper_transformer.wtoken_postfc.layer_4.0.weight'].norm())        
+        #print(dict(self.model.module.text_model.named_parameters())['encoder.layer.10.attention.self.key.weight'].norm())
+        self.model.module.scene_id = scene_id
+        #check = self.model.module.get_conditioning_vec(index= scene_id)
+        #if scene_id == 0:
+        #    set_trace()
+        #    print(check['input_vec'])
+        #self.model.module.conditioning_vector[scene_id] = check
+        
         if self.opt.mem:
             torch.cuda.empty_cache()
 
@@ -362,13 +385,12 @@ class Trainer(object):
         
         # print(shading)
         # torch_vis_2d(pred_rgb[0])
-        
         # text embeddings
         if self.opt.dir_text:
             dirs = data['dir'] # [B,]
-            text_z = self.text_z[dirs]
+            text_z = self.text_z[scene_id][dirs]
         else:
-            text_z = self.text_z
+            text_z = self.text_z[scene_id]
         
         # encode pred_rgb to latents
         # _t = time.time()
@@ -475,33 +497,43 @@ class Trainer(object):
             self.writer = tensorboardX.SummaryWriter(os.path.join(self.workspace, "run", self.name))
 
         start_t = time.time()
-        
         for epoch in range(self.epoch + 1, max_epochs + 1):
-            self.epoch = epoch
+            #max_mem = torch.cuda.max_memory_allocated()*1e-9  
+            #cur_mem = torch.cuda.memory_allocated()*1e-9
+            #print(cur_mem/max_mem)     
 
+            self.epoch = epoch
+            self.model.module.epoch = epoch
+            self.model.module.sigma_net.epoch = epoch 
             self.train_one_epoch(train_loader)
 
             if self.workspace is not None and self.local_rank == 0:
                 self.save_checkpoint(full=True, best=False)
 
+            #GPUtil.showUtilization()
             if self.epoch % self.eval_interval == 0:
-                self.evaluate_one_epoch(valid_loader)
-                self.save_checkpoint(full=False, best=True)
-                self.test(test_loader)                
+                for idx, val in enumerate(self.text_z):
+                    self.evaluate_one_epoch(valid_loader, scene_id= idx)
+                    self.save_checkpoint(full=False, best=True)
+                    self.test(test_loader, scene_id = idx)               
+            #GPUtil.showUtilization()
+
 
         end_t = time.time()
-
+        #set_trace()
         self.log(f"[INFO] training takes {(end_t - start_t)/ 60:.4f} minutes.")
 
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer.close()
 
-    def evaluate(self, loader, name=None):
+    def evaluate(self, loader, name=None, scene_id = None):
         self.use_tensorboardX, use_tensorboardX = False, self.use_tensorboardX
         self.evaluate_one_epoch(loader, name)
         self.use_tensorboardX = use_tensorboardX
 
-    def test(self, loader, save_path=None, name=None, write_video=True):
+    def test(self, loader, save_path=None, name=None, write_video=True, scene_id = None):
+        if scene_id == None:
+            set_trace()
 
         if save_path is None:
             save_path = os.path.join(self.workspace, 'results')
@@ -537,23 +569,23 @@ class Trainer(object):
                     all_preds.append(pred)
                     all_preds_depth.append(pred_depth)
                 else:
-                    cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_rgb.png'), cv2.cvtColor(pred, cv2.COLOR_RGB2BGR))
-                    cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_depth.png'), pred_depth)
+                    cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_{scene_id}_rgb.png'), cv2.cvtColor(pred, cv2.COLOR_RGB2BGR))
+                    cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_{scene_id}_depth.png'), pred_depth)
 
                 pbar.update(loader.batch_size)
 
         if write_video:
             all_preds = np.stack(all_preds, axis=0)
             all_preds_depth = np.stack(all_preds_depth, axis=0)
-            
-            imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_preds, fps=25, quality=8, macro_block_size=1)
-            imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=25, quality=8, macro_block_size=1)
+           
+            imageio.mimwrite(os.path.join(save_path, f'{name}_{scene_id}_rgb.mp4'), all_preds, fps=25, quality=8, macro_block_size=1)
+            imageio.mimwrite(os.path.join(save_path, f'{name}_{scene_id}_depth.mp4'), all_preds_depth, fps=25, quality=8, macro_block_size=1)
 
             from pdb import set_trace
-            imageio.mimwrite(save_path +'/'+str(name)+'_rgb.gif', all_preds, fps=30)
+            imageio.mimwrite(save_path +'/'+str(name)+'_{}_rgb.gif'.format(scene_id), all_preds, fps=30)
             if self.wandb_obj is not None:
-                self.wandb_obj.log({"video": wandb.Video(save_path +"/"+str(name)+'_rgb.gif', fps=30, format='gif')})
-
+                self.wandb_obj.log({"video_{}".format(scene_id): wandb.Video(save_path +"/"+str(name)+'_{}_rgb.gif'.format(scene_id), fps=30, format='gif')})
+            print(save_path +'/'+str(name)+'_{}_rgb.gif'.format(scene_id))
         self.log(f"==> Finished Test.")
     
     # [GUI] train text step.
@@ -697,6 +729,7 @@ class Trainer(object):
             # update grid every 16 steps
             if self.model.module.cuda_ray and self.global_step % self.opt.update_extra_interval == 0:
                 with torch.cuda.amp.autocast(enabled=self.fp16):
+                    self.model.module.scene_id = 0
                     self.model.module.update_extra_state()
 
                     
@@ -704,10 +737,17 @@ class Trainer(object):
             self.global_step += 1
 
             self.optimizer.zero_grad()
-
+            meta_bs = min(len(self.text_z), self.opt.meta_batch_size)
+            scene_ids = random.sample(list(range(0,len(self.text_z))), self.opt.meta_batch_size)
+            #scene_id = torch.bernoulli(torch.tensor([0.0]))
+            #scene_id = int(scene_id.item())
             with torch.cuda.amp.autocast(enabled=self.fp16):
-                pred_rgbs, pred_ws, loss = self.train_step(data)
-         
+                full_loss = 0
+                for scene_id in scene_ids:
+                    pred_rgbs, pred_ws, loss = self.train_step(data, scene_id)
+                    full_loss = full_loss + loss
+                loss = full_loss/len(scene_ids)
+        
             if self.fp16:
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
@@ -723,6 +763,10 @@ class Trainer(object):
                 self.lr_scheduler.step()
 
             loss_val = loss.item()
+            del loss
+            loss = None
+            gc.collect()
+            
             total_loss += loss_val
 
             if self.wandb_obj is not None:
@@ -766,9 +810,11 @@ class Trainer(object):
         self.log(f"==> Finished Epoch {self.epoch}.")
 
 
-    def evaluate_one_epoch(self, loader, name=None):
+    def evaluate_one_epoch(self, loader, name=None, scene_id = None ):
         self.log(f"++> Evaluate {self.workspace} at epoch {self.epoch} ...")
 
+        if scene_id is None:
+            set_trace()
         if name is None:
             name = f'{self.name}_ep{self.epoch:04d}'
 
@@ -777,6 +823,7 @@ class Trainer(object):
             for metric in self.metrics:
                 metric.clear()
 
+        self.model.module.scene_id = scene_id
         self.model.eval()
 
         if self.ema is not None:
@@ -815,9 +862,8 @@ class Trainer(object):
                 if self.local_rank == 0:
 
                     # save image
-                    save_path = os.path.join(self.workspace, 'validation', f'{name}_{self.local_step:04d}_rgb.png')
-                    save_path_depth = os.path.join(self.workspace, 'validation', f'{name}_{self.local_step:04d}_depth.png')
-
+                    save_path = os.path.join(self.workspace, 'validation', f'{name}_{self.local_step:04d}_{scene_id}_rgb.png')
+                    save_path_depth = os.path.join(self.workspace, 'validation', f'{name}_{self.local_step:04d}_{scene_id}_depth.png')
                     #self.log(f"==> Saving validation image to {save_path}")
                     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
@@ -879,8 +925,7 @@ class Trainer(object):
                 state['ema'] = self.ema.state_dict()
         
         if not best:
-
-            state['model'] = self.model.module.state_dict()
+            state['model'] = self.model.state_dict()
 
             file_path = f"{name}.pth"
 
@@ -893,7 +938,7 @@ class Trainer(object):
 
             torch.save(state, os.path.join(self.ckpt_path, file_path))
 
-        else:    
+        else:
             if len(self.stats["results"]) > 0:
                 if self.stats["best_result"] is None or self.stats["results"][-1] < self.stats["best_result"]:
                     self.log(f"[INFO] New best result: {self.stats['best_result']} --> {self.stats['results'][-1]}")
@@ -904,7 +949,7 @@ class Trainer(object):
                         self.ema.store()
                         self.ema.copy_to()
 
-                    state['model'] = self.model.module.state_dict()
+                    state['model'] = self.model.state_dict()
 
                     if self.ema is not None:
                         self.ema.restore()
@@ -944,11 +989,11 @@ class Trainer(object):
             except:
                 self.log("[WARN] failed to loaded EMA.")
 
-        if self.model.cuda_ray:
+        if self.model.module.cuda_ray:
             if 'mean_count' in checkpoint_dict:
-                self.model.mean_count = checkpoint_dict['mean_count']
+                self.model.module.mean_count = checkpoint_dict['mean_count']
             if 'mean_density' in checkpoint_dict:
-                self.model.mean_density = checkpoint_dict['mean_density']
+                self.model.module.mean_density = checkpoint_dict['mean_density']
 
         if model_only:
             return

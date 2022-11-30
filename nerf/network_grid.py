@@ -50,21 +50,22 @@ class MLP(nn.Module):
         self.opt = opt
         self.wandb_obj = wandb_obj
         net = []
-
+        inp_dim_aug_dim = 0  
         if self.nerf_conditioning:
             if self.opt.conditioning_mode == 'sum' or self.opt.conditioning_dim ==0:
                 transform_dim = self.dim_hidden
             else:
                 transform_dim = opt.conditioning_dim 
 
+            '''
             if opt.multiple_conditioning_transformers:
                 self.transform_list = nn.ModuleList()
                 for i in range(num_layers):
                 
                     self.transform_list.append(nn.Sequential(wn(nn.Linear(512, self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim))))
                     self.apply_init(model = self.transform_list[i], init='ortho')
-
-            else:
+            '''
+            if True:
                 #self.transform = nn.Sequential(wn(nn.Linear(512+512 , self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))
                 #self.transform = nn.Sequential(wn(nn.Linear(512 , self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))
                 self.transform = nn.Linear(512,transform_dim)
@@ -78,61 +79,30 @@ class MLP(nn.Module):
 
         for l in range(num_layers):
             #if self.nerf_conditioning:
-           
+            inp_dim_aug_dim = 0 
+            if opt is not None: 
             #net.append(nn.Linear(self.dim_in  if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias))
-            if True : #self.nerf_conditioning:
-                if opt is not None and opt.bottleneck and num_layers >=5: 
+                if opt.pos_enc_ins == 0:
+                    opt.pos_enc_ins = num_layers +1
+ 
+                if l % opt.pos_enc_ins  ==0 and l!=0:
+                    inp_dim_aug_dim = inp_dim_aug_dim + 32
+                        
+                if self.nerf_conditioning:
                     if l ==0:
-                        if opt.WN is None or 'not_first' in opt.WN :
-                            net.append(nn.Linear(self.dim_in, self.dim_hidden))
-                        else:
-                            net.append(wn(nn.Linear(self.dim_in, self.dim_hidden)) )
-                            
-                    elif l == num_layers - 3:
-                        net.append(nn.Linear(self.dim_hidden, self.dim_hidden//2))
-                    elif l == num_layers - 2:
-                        net.append(nn.Linear(self.dim_hidden//2, self.dim_hidden//4)) 
-                    elif l == num_layers - 1:
-                        if opt.WN is None or 'not_last' in opt.WN : 
-                            net.append(nn.Linear(self.dim_hidden//4,4))
-                        else:
-                            net.append(wn(nn.Linear(self.dim_hidden//4,4)))
-                    else:
-                        if opt.WN is not None:
-                            net.append(wn(nn.Linear(self.dim_hidden, self.dim_hidden)))
-                        else:
-                            net.append(nn.Linear(self.dim_hidden, self.dim_hidden))
+                        inp_dim_aug_dim =  0#transform_dim
+                    elif self.opt.conditioning_mode == 'cat' and (l ==2 or l==3 or l==4):
+                        inp_dim_aug_dim = inp_dim_aug_dim + transform_dim
+
+                if opt is not None and  opt.WN is not None: 
+                    net.append(wn(nn.Linear(self.dim_in + inp_dim_aug_dim if l == 0 else self.dim_hidden + inp_dim_aug_dim, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)))
                 else:
-                    if opt is not None and  opt.WN is not None:
-                        if l==0 and 'not_first' in opt.WN:
-                            net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias))
-                        elif l == num_layers -1 and 'not_last' in opt.WN : 
-                            net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)) 
-                        else:
-                            if opt.pos_enc_ins == 0:
-                                opt.pos_enc_ins = num_layers +1
-                            inp_dim_aug_dim = 0
-                            if l % opt.pos_enc_ins  ==0 and l!=0:
-                                 
-                                inp_dim_aug_dim = inp_dim_aug_dim + 32
-                                #net.append(wn(nn.Linear(self.dim_in  if l == 0 else self.dim_hidden+32, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)))
-                            
-                            if self.nerf_conditioning:
-
-                                if l ==0:
-                                    inp_dim_aug_dim =  0#transform_dim
-                                elif self.opt.conditioning_mode == 'cat' and (l ==2 or l==3 or l==4):
-                                    inp_dim_aug_dim = inp_dim_aug_dim + transform_dim
-                                
-
-                            net.append(wn(nn.Linear(self.dim_in + inp_dim_aug_dim if l == 0 else self.dim_hidden + inp_dim_aug_dim, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)))
-                    else:
-                        net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias))
+                    net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias))
             else:
                 net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)) 
 
-            if opt is not None and 'LN' in opt.normalization:
-                self.layer_norm_list.append(nn.LayerNorm(self.dim_hidden, elementwise_affine = True))
+        if opt is not None and 'LN' in opt.normalization:
+            self.layer_norm_list.append(nn.LayerNorm(self.dim_hidden, elementwise_affine = True))
 
         self.net = nn.ModuleList(net)
         if self.init is not None:
@@ -266,8 +236,11 @@ class NeRFNetwork(NeRFRenderer):
             self.nerf_conditioning = True
         elif opt.conditioning_model == 'T5':
             from transformers import AutoTokenizer, AutoModelWithLMHead
-            self.text_model_tokenizer = AutoTokenizer.from_pretrained("t5-small")
-            self.text_model = AutoModelWithLMHead.from_pretrained("t5-small").cuda()
+            import os
+            set_trace()
+            os.environ['TRANSFORMERS_CACHE'] = './cache'
+            self.text_model_tokenizer = AutoTokenizer.from_pretrained("t5-small", cache_dir = "./cache")
+            self.text_model = AutoModelWithLMHead.from_pretrained("t5-small", cache_dir = "./cache").cuda()
             
             for parameters in self.text_model.parameters():
                 parameters.requires_grad = False
@@ -279,6 +252,7 @@ class NeRFNetwork(NeRFRenderer):
         if self.nerf_conditioning:
             with torch.no_grad():
                 self.conditioning_vector = self.get_conditioning_vec()
+                set_trace()
             del self.text_model_tokenizer
             self.text_model_tokenizer = None
             gc.collect()
