@@ -60,7 +60,11 @@ class MLP(nn.Module):
         if self.hyper_flag:
             print('invoking hyper trans')
             self.transformer_encoder = TransformerEncoder(64, 6,12,16,64)
-
+            if self.opt.conditioning_model == 'T5':
+                self.hyper_transform = nn.Linear(512,64)
+            elif self.opt.conditioning_model == 'bert':
+                self.hyper_transform = nn.Linear(768,64)
+            nn.init.orthogonal_(self.hyper_transform.weight)
 
         if self.nerf_conditioning:
             if self.opt.conditioning_mode == 'sum' or self.opt.conditioning_dim ==0:
@@ -71,20 +75,24 @@ class MLP(nn.Module):
             if opt.multiple_conditioning_transformers:
                 self.transform_list = nn.ModuleList()
                 for i in range(num_layers):
-                
-                    self.transform_list.append(nn.Sequential(wn(nn.Linear(512, self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim))))
-                    self.apply_init(model = self.transform_list[i], init='ortho')
+                    if self.opt.conditioning_model == 'T5':
+                        self.transform_list.append(nn.Sequential(wn(nn.Linear(512, self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim))))
+                        self.apply_init(model = self.transform_list[i], init='ortho')
+                    elif self.opt.conditioning_model  == 'bert':
+                        self.transform_list.append(nn.Sequential(wn(nn.Linear(768, self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))) 
+                        self.apply_init(model = self.transform_list[i], init='ortho')
+
 
             else:
                 #self.transform = nn.Sequential(wn(nn.Linear(512+512 , self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))
                 #self.transform = nn.Sequential(wn(nn.Linear(512 , self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))
                 if self.opt.conditioning_model == 'bert':
-                    self.transform = nn.Linear(768,transform_dim)
+                    self.transform = nn.Linear(768 + 256,transform_dim)
                 else:
-                    self.transform = nn.Linear(512,transform_dim)
+                    self.transform = nn.Linear(512+256,transform_dim)
                 nn.init.orthogonal_(self.transform.weight) 
                 #self.apply_init(model = self.transform, init='ortho')
-                self.layer_id_encoder = PositionalEncoding(d_model = transform_dim, max_len = num_layers)
+                self.layer_id_encoder = PositionalEncoding(d_model = 256, max_len = num_layers)
                 self.layer_index = self.layer_id_encoder().cuda()
 
         if opt is not None and 'LN' in opt.normalization :
@@ -197,6 +205,16 @@ class MLP(nn.Module):
                 print('maintain default')
             #print('checking')
         #set_trace()
+    def adaptive_norm(self,x,condition_vec):
+        style_mean = condition_vec.mean()
+        style_std  = condition_vec.std()
+        
+        content_mean = x.mean(dim=-1)
+        content_std  = x.std(dim=-1)
+        
+        normalized_feat = (x - content_mean.unsqueeze(-1))/content_std.unsqueeze(-1)
+        out = (normalized_feat * style_std) +  style_mean
+        return out
         
     def forward(self, x, conditioning_vector = None,epoch = None):
         #print(x.device)i
@@ -209,7 +227,7 @@ class MLP(nn.Module):
             if conditioning_vector is None:
                 params = self.hyper_transformer(self.hyper_inp)
             else:
-                processed_tokens = self.transform(conditioning_vector[scene_id]['input_tokens'].squeeze(0))
+                processed_tokens = self.hyper_transform(conditioning_vector[scene_id]['input_tokens'].squeeze(0))
                 #processed_tokens = processed_tokens.unsqueeze(0)
                 params = self.hyper_transformer(processed_tokens)
             #self.set_params(params)
@@ -222,7 +240,9 @@ class MLP(nn.Module):
             #Pre-Normalization
             if self.opt is not None and  l !=0 and self.opt.normalization == "pre_LN":
                 x = self.layer_norm_list[l](x)
-                
+            
+            if self.opt is not None and self.opt.normalization == "pre_ada" and self.nerf_conditioning:
+                x = self.adaptive_norm(x,conditioning_vector[scene_id]['input_vec'])
             # conditioning options
             if self.nerf_conditioning  and (l ==2 or l ==3 or l ==4  ):
 
@@ -234,7 +254,8 @@ class MLP(nn.Module):
                 else:
                     layer_id_enc_vec = self.layer_index[l]
                     layer_id_enc_vec = layer_id_enc_vec/layer_id_enc_vec.norm()
-                    cond_vec_with_pos_enc = conditioning_vector[scene_id]['input_vec'] #torch.cat((conditioning_vector['input_vec'],layer_id_enc_vec), dim=1)
+                    #cond_vec_with_pos_enc = conditioning_vector[scene_id]['input_vec'] #torch.cat((conditioning_vector['input_vec'],layer_id_enc_vec), dim=1)
+                    cond_vec_with_pos_enc = torch.cat((conditioning_vector[scene_id]['input_vec'],layer_id_enc_vec), dim=1)
                     #if scene_id == 0:
                     #    print(cond_vec_with_pos_enc)
                         #set_trace()
@@ -268,6 +289,9 @@ class MLP(nn.Module):
                 x = self.net[l](x)
 
             #Post Normalization
+            if self.opt is not None and l != self.num_layers - 1 and self.opt.normalization == "post_ada" and self.nerf_conditioning:  
+                x = self.adaptive_norm(x,conditioning_vector[scene_id]['input_vec'])
+
             if self.opt is not None and l != self.num_layers - 1 and self.opt.normalization == "post_LN":
                
                 x = self.layer_norm_list[l](x) 
