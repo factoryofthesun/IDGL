@@ -234,10 +234,24 @@ class NeRFNetwork(NeRFRenderer):
             for parameters in self.clip_model.parameters():
                 parameters.requires_grad = False
             self.nerf_conditioning = True
+
+        elif opt.conditioning_model == 'bert':
+            from transformers import AutoTokenizer, AutoModel
+            self.text_model_tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/bert-base-nli-mean-tokens', cache_dir = "./local_dir")
+            self.text_model = AutoModel.from_pretrained('sentence-transformers/bert-base-nli-mean-tokens',cache_dir = "./local_dir").cuda()
+            for parameters in list(self.text_model.parameters()):
+                parameters.requires_grad = False
+
+            if self.opt.fine_tune_conditioner:
+                for parameters in list(self.text_model.parameters())[-34:-2]:
+                    parameters.requires_grad = True
+
+            self.nerf_conditioning = True
+
+
         elif opt.conditioning_model == 'T5':
             from transformers import AutoTokenizer, AutoModelWithLMHead
             import os
-            set_trace()
             os.environ['TRANSFORMERS_CACHE'] = './cache'
             self.text_model_tokenizer = AutoTokenizer.from_pretrained("t5-small", cache_dir = "./cache")
             self.text_model = AutoModelWithLMHead.from_pretrained("t5-small", cache_dir = "./cache").cuda()
@@ -252,11 +266,10 @@ class NeRFNetwork(NeRFRenderer):
         if self.nerf_conditioning:
             with torch.no_grad():
                 self.conditioning_vector = self.get_conditioning_vec()
-                set_trace()
-            del self.text_model_tokenizer
-            self.text_model_tokenizer = None
-            gc.collect()
-            torch.cuda.empty_cache()
+            #del self.text_model_tokenizer
+            #self.text_model_tokenizer = None
+            #gc.collect()
+            #torch.cuda.empty_cache()
         else:
             self.conditioning_vector = None
 
@@ -278,8 +291,10 @@ class NeRFNetwork(NeRFRenderer):
         else:
             self.bg_net = None
 
+
     def get_conditioning_vec(self,index=0):
-        conditioning_vector = None 
+        conditioning_vector = None
+
         if self.conditioning_model == 'CLIP':
             ref_text = self.opt.text[index]
             conditioning_vector = {}
@@ -288,7 +303,6 @@ class NeRFNetwork(NeRFRenderer):
             text_token = clip.tokenize(ref_text).to('cuda')
             with torch.no_grad():
                 conditioning_tokens = self.clip_model.encode_text(text_token)
-            set_trace()
             conditioning_tokens = conditioning_tokens/ conditioning_tokens.norm(dim=-1, keepdim =True)
             conditioning_vector['input_vec']  = conditioning_tokens
             conditioning_vector['input_tokens'] = conditioning_tokens
@@ -298,8 +312,11 @@ class NeRFNetwork(NeRFRenderer):
             conditioning_vector = {}
             #if self.opt.dir_text:
             #    print('not implemented')
+            #self.text_model.eval()
             text_token =torch.tensor(self.text_model_tokenizer([ref_text])['input_ids']).to('cuda')
             decoder_input_ids = self.text_model_tokenizer("dummy text to be ignored", return_tensors="pt").input_ids.cuda()
+            self.text_token = text_token
+            self.decoder_input_ids = decoder_input_ids
             if False: #TODO change later sud
                 conditioning_tokens = self.text_model(text_token, decoder_input_ids = decoder_input_ids)['encoder_last_hidden_state']
             else:
@@ -307,8 +324,43 @@ class NeRFNetwork(NeRFRenderer):
                     conditioning_tokens = self.text_model(text_token, decoder_input_ids = decoder_input_ids)['encoder_last_hidden_state']
             conditioning_vector['input_vec'] = conditioning_tokens.mean(dim=1)/conditioning_tokens.mean(dim=1).norm(dim=-1, keepdim=True)
             conditioning_vector['input_tokens'] = conditioning_tokens/conditioning_tokens.norm(dim=-1, keepdim = True )
-        return conditioning_vector    
 
+        elif self.conditioning_model == 'bert':
+
+            def mean_pooling(model_output, attention_mask):
+                token_embeddings = model_output[0] #First element of model_output contains all token embeddings
+                input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+                return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+
+            #set_trace()
+            ref_text = self.opt.text[index]
+            if self.opt.phrasing:
+                hyper_net_phrase = []
+                for word in ref_text.split(' '):
+                    for  key_word in  ['chair','refrigerator,','table', 'couch','toaster', 'plaid', 'iron', 'stained glass', 'origami', 'wood', 'gold', 'blender', 'pumpkin', 'orange', 'green'] :
+                        if key_word in word:
+                            hyper_net_phrase.append(' '+word)
+                hyper_net_phrase = ' '.join(hyper_net_phrase) * 10
+                #print(hyper_net_phrase)
+                ref_text = hyper_net_phrase
+                #set_trace()
+            conditioning_vector = {}
+
+            text_token = self.text_model_tokenizer(ref_text, padding=True, truncation=True, return_tensors='pt')
+            text_token['input_ids'] = text_token['input_ids'].cuda()
+            text_token['token_type_ids'] = text_token['token_type_ids'].cuda()
+            text_token['attention_mask'] = text_token['attention_mask'].cuda()
+            if self.opt.fine_tune_conditioner:
+                model_output = self.text_model(**text_token)
+            else:
+                with torch.no_grad():
+                    model_output = self.text_model(**text_token)
+            conditioning_tokens = model_output[0]
+            inp_vec = mean_pooling(model_output, text_token['attention_mask'])
+            conditioning_vector['input_vec']  = inp_vec/inp_vec.norm(dim=-1, keepdim=True)
+            conditioning_vector['input_tokens'] = conditioning_tokens/conditioning_tokens.norm(dim=-1, keepdim = True )         
+
+        return conditioning_vector
 
     # add a density blob to the scene center
     def gaussian(self, x):
@@ -334,6 +386,10 @@ class NeRFNetwork(NeRFRenderer):
         #print(h.shape)
         #if self.sigma_net.epoch == 11:
         #    set_trace()
+        self.sigma_net.module.scene_id = self.scene_id
+        temp = self.get_conditioning_vec(index = self.scene_id)
+        self.conditioning_vector[self.scene_id]  = temp
+        #set_trace()
         h = self.sigma_net(h, conditioning_vector = self.conditioning_vector, epoch = self.sigma_net.epoch)
 
         sigma = trunc_exp(h[..., 0] + self.gaussian(x))

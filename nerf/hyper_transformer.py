@@ -54,10 +54,10 @@ class TransInr(nn.Module):
         dtokens = data #self.tokenizer(data)
         B = 1#dtokens.shape[0]
         dtokens = einops.repeat(dtokens, 'n d -> b n d', b=B)
+        dtokens = dtokens.repeat(1,50,1)
         wtokens = einops.repeat(self.wtokens, 'n d -> b n d', b=B)
-        trans_out = self.transformer_encoder(torch.cat([dtokens, wtokens], dim=1))
+        trans_out = self.transformer_encoder(torch.cat([dtokens, wtokens], dim=1), data)
         trans_out = trans_out[:, -len(self.wtokens):, :]
-
         params = dict()
         for name, shape in self.hyponet_param_shapes:
             wb = einops.repeat(self.base_params[name], 'n m -> b n m', b=B)

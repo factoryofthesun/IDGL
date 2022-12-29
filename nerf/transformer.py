@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import einops
-
+from pdb import set_trace
 #from .models import register
 
 
@@ -50,6 +50,20 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
+
+def adaptive_norm(x,condition_vec):
+    set_trace()
+    style_mean = condition_vec.mean(dim=-1)
+    style_std  = condition_vec.std(dim=-1)
+
+    content_mean = x.mean(dim=-1)
+    content_std  = x.std(dim=-1)
+
+    normalized_feat = (x - content_mean.unsqueeze(-1))/content_std.unsqueeze(-1)
+    out = (normalized_feat * style_std) +  style_mean
+    return out
+
+
 class PreNorm(nn.Module):
 
     def __init__(self, dim, fn):
@@ -57,8 +71,12 @@ class PreNorm(nn.Module):
         self.norm = nn.LayerNorm(dim)
         self.fn = fn
 
-    def forward(self, x):
+    def forward(self, x, cond_vec):
+        #set_trace()
         return self.fn(self.norm(x))
+        #return self.fn(adaptive_norm(x,cond_vec))
+
+
 
 
 #@register('transformer_encoder')
@@ -74,8 +92,14 @@ class TransformerEncoder(nn.Module):
                 PreNorm(dim, FeedForward(dim, ff_dim, dropout=dropout)),
             ]))
 
-    def forward(self, x):
+    def forward(self, x,data):
+        data = data.unsqueeze(0)
+
+        layer_id = 0
         for norm_attn, norm_ff in self.layers:
-            x = x + norm_attn(x)
-            x = x + norm_ff(x)
+            if layer_id != 0:
+                x = torch.cat([data.repeat(1,10,1),x],dim=1)
+            x = x + norm_attn(x,data)
+            x = x + norm_ff(x,data)
+            layer_id = layer_id+1
         return x

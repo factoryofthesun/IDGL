@@ -705,6 +705,13 @@ class Trainer(object):
     #     return outputs
 
     def train_one_epoch(self, loader):
+
+
+        if self.opt.curricullum:
+            num_objects = min((self.global_step // 1000 ) + 1, len(self.text_z))
+        else:
+            num_objects = len(self.text_z)
+
         self.log(f"==> Start Training {self.workspace} Epoch {self.epoch}, lr={self.optimizer.param_groups[0]['lr']:.6f} ...")
 
         total_loss = 0
@@ -738,7 +745,7 @@ class Trainer(object):
 
             self.optimizer.zero_grad()
             meta_bs = min(len(self.text_z), self.opt.meta_batch_size)
-            scene_ids = random.sample(list(range(0,len(self.text_z))), self.opt.meta_batch_size)
+            scene_ids = random.sample(list(range(0,len(self.text_z)))[:num_objects], min(self.opt.meta_batch_size, len(list(range(0,len(self.text_z)))[:num_objects])))
             #scene_id = torch.bernoulli(torch.tensor([0.0]))
             #scene_id = int(scene_id.item())
             with torch.cuda.amp.autocast(enabled=self.fp16):

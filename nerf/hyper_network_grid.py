@@ -18,6 +18,7 @@ import math
 
 from .transformer import TransformerEncoder
 from .hyper_transformer import TransInr
+#from .dynamic_hyper import TransInr
 from .layers import batched_linear_mm
 
 
@@ -59,11 +60,11 @@ class MLP(nn.Module):
         net = []
         if self.hyper_flag:
             print('invoking hyper trans')
-            self.transformer_encoder = TransformerEncoder(64, 6,12,16,64)
+            self.transformer_encoder = TransformerEncoder(256, 6,12,16,64)
             if self.opt.conditioning_model == 'T5':
                 self.hyper_transform = nn.Linear(512,64)
             elif self.opt.conditioning_model == 'bert':
-                self.hyper_transform = nn.Linear(768,64)
+                self.hyper_transform = nn.Linear(768,256)
             nn.init.orthogonal_(self.hyper_transform.weight)
 
         if self.nerf_conditioning:
@@ -100,8 +101,8 @@ class MLP(nn.Module):
 
         for l in range(num_layers):
             #if self.nerf_conditioning:
-           
-            #net.append(nn.Linear(self.dim_in  if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias))
+            inp_dim_aug_dim = 0 
+            #net.append(nn.Linear(self.dim_in  if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias)) 
             if True : #self.nerf_conditioning:
                 if opt is not None and opt.bottleneck and num_layers >=5: 
                     if l ==0:
@@ -141,9 +142,9 @@ class MLP(nn.Module):
                             
                             if self.nerf_conditioning:
 
-                                if l ==0:
-                                    inp_dim_aug_dim =  0#transform_dim
-                                elif self.opt.conditioning_mode == 'cat' and (l ==2 or l==3 or l==4):
+                                #if l ==0:
+                                #    inp_dim_aug_dim =  0#transform_dim
+                                if self.opt.conditioning_mode == 'cat' and (l==0 or l ==1 or l ==2 or l==3 or l==4):
                                     inp_dim_aug_dim = inp_dim_aug_dim + transform_dim
                                 
 
@@ -158,6 +159,8 @@ class MLP(nn.Module):
             if opt is not None and 'LN' in opt.normalization:
                 self.layer_norm_list.append(nn.LayerNorm(self.dim_hidden, elementwise_affine = True))
 
+
+        #self.hyper_flag = False
         if self.hyper_flag:
             if not self.nerf_conditioning:
                 self.hyper_inp = nn.Parameter(torch.rand(1,512)).cuda()
@@ -228,10 +231,12 @@ class MLP(nn.Module):
                 params = self.hyper_transformer(self.hyper_inp)
             else:
                 processed_tokens = self.hyper_transform(conditioning_vector[scene_id]['input_tokens'].squeeze(0))
-                #processed_tokens = processed_tokens.unsqueeze(0)
-                params = self.hyper_transformer(processed_tokens)
+                if 'dynamic' not in self.opt.arch:
+                    params = self.hyper_transformer(processed_tokens)
+                else:
+                    processed_scene_vec = self.hyper_transformer.get_scene_vec(processed_tokens) 
             #self.set_params(params)
-
+        hyper_inp = None
         for l in range(self.num_layers):
             # skip options                
             #if l % 2 ==1 and l>1 and self.opt is not None and self.opt.skip:
@@ -244,7 +249,7 @@ class MLP(nn.Module):
             if self.opt is not None and self.opt.normalization == "pre_ada" and self.nerf_conditioning:
                 x = self.adaptive_norm(x,conditioning_vector[scene_id]['input_vec'])
             # conditioning options
-            if self.nerf_conditioning  and (l ==2 or l ==3 or l ==4  ):
+            if self.nerf_conditioning  and ( l==0 or l ==1 or l ==2 or l ==3 or l ==4  ):
 
                 #x = torch.cat((x+self.transform(conditioning_vector['input_vec']).repeat(x.shape[0],1)), dim=1)
                 if self.opt.multiple_conditioning_transformers:
@@ -262,21 +267,11 @@ class MLP(nn.Module):
                     proj_cond_vec = self.transform(cond_vec_with_pos_enc)
                     
 
-                #print(self.transform[0].weight.norm())
                 proj_cond_vec = torch.nn.functional.layer_norm(proj_cond_vec, (64,))
                 proj_cond_vec = proj_cond_vec /proj_cond_vec.norm().detach()
-                #proj_cond_vec = proj_cond_vec *1
                 if  l==0 or self.opt.conditioning_mode == 'cat'  :
-                    #if self.opt.wandb_flag:
-                    #   self.wandb_obj.log({'act_norm_{}'.format(l):x[0].norm()}) 
-                    #   self.wandb_obj.log({'cond_norm_{}'.format(l):proj_cond_vec.norm()})i
-                    #x = x/x.norm(dim=1).unsqueeze(dim=1)
-                    #proj_cond_vec = proj_cond_vec / proj_cond_vec.norm()
                     x = torch.cat((x,proj_cond_vec.repeat(x.shape[0],1)), dim=1)
                 else:
-                    #if self.opt.wandb_flag:
-                    #   self.wandb_obj.log({'act_norm_{}'.format(l):x[0].norm()})
-                    #   self.wandb_obj.log({'cond_norm_{}'.format(l):proj_cond_vec.norm()})
                     
                     x = x +  proj_cond_vec.repeat(x.shape[0],1)    #self.transform(conditioning_vector['input_vec']).repeat(x.shape[0],1)
                     
@@ -284,7 +279,15 @@ class MLP(nn.Module):
                 x = torch.cat((x,pos_enc), dim=1)
             # forward pass
             if self.hyper_flag:
-                x = F.linear(x,params['layer_{}'.format(l)])#batched_linear_mm(x, params['layer_{}'.format(l)])
+                if 'dynamic' in self.opt.arch:
+                    params = self.hyper_transformer.get_params(processed_scene_vec, l, hyper_inp)
+                    x = F.linear(x,params['layer_{}'.format(l)])#batched_linear_mm(x, params['layer_{}'.format(l)])i
+                    if 'detach'  in self.opt.arch:
+                        hyper_inp = x.detach()
+                    else:
+                        hyper_inp = x
+                else:
+                    x = F.linear(x,params['layer_{}'.format(l)])
             else:
                 x = self.net[l](x)
 
@@ -320,7 +323,6 @@ class HyperTransNeRFNetwork(NeRFRenderer):
                  ):
         
         super().__init__(opt)
-
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
 
@@ -398,7 +400,8 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             self.bg_net = None
 
     def get_conditioning_vec(self,index=0):
-        conditioning_vector = None 
+        conditioning_vector = None
+ 
         if self.conditioning_model == 'CLIP':
             ref_text = self.opt.text[index]
             conditioning_vector = {}
@@ -430,12 +433,23 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             conditioning_vector['input_tokens'] = conditioning_tokens/conditioning_tokens.norm(dim=-1, keepdim = True )
         
         elif self.conditioning_model == 'bert':
+            
             def mean_pooling(model_output, attention_mask):
                 token_embeddings = model_output[0] #First element of model_output contains all token embeddings
                 input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
                 return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
             ref_text = self.opt.text[index]
+            if self.opt.phrasing:
+                hyper_net_phrase = []
+                for word in ref_text.split(' '):
+                    for  key_word in  ['chair','refrigerator,','table', 'couch','toaster', 'plaid', 'iron', 'stained glass', 'origami', 'wood', 'gold', 'blender', 'pumpkin', 'orange', 'green'] :
+                        if key_word in word:
+                            hyper_net_phrase.append(' '+word)
+                hyper_net_phrase = ' '.join(hyper_net_phrase) * 10
+                #print(hyper_net_phrase)
+                ref_text = hyper_net_phrase
+                #set_trace()
             conditioning_vector = {}     
              
             text_token = self.text_model_tokenizer(ref_text, padding=True, truncation=True, return_tensors='pt')

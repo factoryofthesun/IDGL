@@ -103,6 +103,8 @@ if __name__ == '__main__':
     parser.add_argument('--conditioning_dim', type = int, default = 0 )
     parser.add_argument('--meta_batch_size', type = int, default = 1)
     parser.add_argument('--multiple_conditioning_transformers', action = 'store_true')
+    parser.add_argument('--phrasing', action = 'store_true')
+    parser.add_argument('--curricullum', action = 'store_true')
     #### Other option
     parser.add_argument('--mem', action='store_true', help="overwrite current experiment")
     # parser.add_argument('--radius', type=float, default=3, help="default GUI camera radius from center")
@@ -152,7 +154,7 @@ if __name__ == '__main__':
     print(opt)
 
     seed_everything(opt.seed)
-    if opt.arch == 'hyper_transformer':
+    if  'hyper_transformer' in opt.arch:
        from nerf.hyper_network_grid import HyperTransNeRFNetwork as NeRFNetwork
 
     if True:
