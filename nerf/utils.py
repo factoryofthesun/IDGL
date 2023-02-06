@@ -708,7 +708,7 @@ class Trainer(object):
 
 
         if self.opt.curricullum:
-            num_objects = min((self.global_step // 1000 ) + 1, len(self.text_z))
+            num_objects = min((self.global_step // 1000 ) + 2, len(self.text_z))
         else:
             num_objects = len(self.text_z)
 

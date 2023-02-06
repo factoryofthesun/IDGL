@@ -18,7 +18,7 @@ import math
 
 from .transformer import TransformerEncoder
 from .hyper_transformer import TransInr
-#from .dynamic_hyper import TransInr
+from .dynamic_hyper import DyTransInr
 from .layers import batched_linear_mm
 
 
@@ -60,7 +60,7 @@ class MLP(nn.Module):
         net = []
         if self.hyper_flag:
             print('invoking hyper trans')
-            self.transformer_encoder = TransformerEncoder(256, 6,12,16,64)
+            self.transformer_encoder = TransformerEncoder(256, 6,12,16,64, condition_trans = opt.condition_trans)
             if self.opt.conditioning_model == 'T5':
                 self.hyper_transform = nn.Linear(512,64)
             elif self.opt.conditioning_model == 'bert':
@@ -167,7 +167,11 @@ class MLP(nn.Module):
             param_shapes= {}
             for idx, layer in enumerate(net):
                 param_shapes['layer_{}'.format(idx)] = layer.weight.shape
-            self.hyper_transformer = TransInr(param_shapes.items(), self.dim_hidden, self.transformer_encoder)
+           
+            if 'dynamic' in self.opt.arch :
+                self.hyper_transformer = DyTransInr(param_shapes.items(), self.dim_hidden, self.transformer_encoder)
+            else:
+                self.hyper_transformer = TransInr(param_shapes.items(), self.dim_hidden, self.transformer_encoder)
         else:
             self.net = nn.ModuleList(net)
             if self.init is not None:
@@ -266,8 +270,7 @@ class MLP(nn.Module):
                         #set_trace()
                     proj_cond_vec = self.transform(cond_vec_with_pos_enc)
                     
-
-                proj_cond_vec = torch.nn.functional.layer_norm(proj_cond_vec, (64,))
+                proj_cond_vec = torch.nn.functional.layer_norm(proj_cond_vec, (proj_cond_vec.shape[1],))
                 proj_cond_vec = proj_cond_vec /proj_cond_vec.norm().detach()
                 if  l==0 or self.opt.conditioning_mode == 'cat'  :
                     x = torch.cat((x,proj_cond_vec.repeat(x.shape[0],1)), dim=1)
@@ -443,12 +446,21 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             if self.opt.phrasing:
                 hyper_net_phrase = []
                 for word in ref_text.split(' '):
-                    for  key_word in  ['chair','refrigerator,','table', 'couch','toaster', 'plaid', 'iron', 'stained glass', 'origami', 'wood', 'gold', 'blender', 'pumpkin', 'orange', 'green'] :
+                    for  key_word in  ['chair','refrigerator,','table', 'couch','toaster', 'plaid', 'iron', 'stained glass', 'origami', 'wood', 'gold', 'blender', 'pumpkin', 'orange', 'green', 'blue', 'red', 'yellow'] :
                         if key_word in word:
                             hyper_net_phrase.append(' '+word)
+                        if  word in ['orange', 'green', 'blue', 'red', 'yellow']:
+                            color_net_phrase.append(' '+word)
+                        if  word in ['chair', 'table']:
+                            shape_net_phrase.append(' '+word)                        
+
+                
                 hyper_net_phrase = ' '.join(hyper_net_phrase) * 10
+                color_net_phrase = ' '.join(color_net_phrase) * 10
+                shape_net_phrase = ' '.join(shape_net_phrase) * 10
                 #print(hyper_net_phrase)
                 ref_text = hyper_net_phrase
+                print(ref_text)
                 #set_trace()
             conditioning_vector = {}     
              

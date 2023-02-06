@@ -82,10 +82,11 @@ class PreNorm(nn.Module):
 #@register('transformer_encoder')
 class TransformerEncoder(nn.Module):
 
-    def __init__(self, dim, depth, n_head, head_dim, ff_dim, dropout=0.):
+    def __init__(self, dim, depth, n_head, head_dim, ff_dim, dropout=0., condition_trans = False):
         super().__init__()
         self.dim = dim
         self.layers = nn.ModuleList()
+        self.condition_trans =  condition_trans
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 PreNorm(dim, Attention(dim, n_head, head_dim, dropout=dropout)),
@@ -97,7 +98,8 @@ class TransformerEncoder(nn.Module):
 
         layer_id = 0
         for norm_attn, norm_ff in self.layers:
-            if layer_id != 0:
+            
+            if layer_id != 0 and self.condition_trans :
                 x = torch.cat([data.repeat(1,10,1),x],dim=1)
             x = x + norm_attn(x,data)
             x = x + norm_ff(x,data)
