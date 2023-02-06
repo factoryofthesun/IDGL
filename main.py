@@ -103,10 +103,13 @@ if __name__ == '__main__':
     parser.add_argument('--conditioning_dim', type = int, default = 0 )
     parser.add_argument('--meta_batch_size', type = int, default = 1)
     parser.add_argument('--multiple_conditioning_transformers', action = 'store_true')
+    parser.add_argument('--condition_trans', action = 'store_true')
     parser.add_argument('--phrasing', action = 'store_true')
     parser.add_argument('--curricullum', action = 'store_true')
+    
     #### Other option
     parser.add_argument('--mem', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--dummy', action='store_true', help="overwrite current experiment") 
     # parser.add_argument('--radius', type=float, default=3, help="default GUI camera radius from center")
     # parser.add_argument('--fovy', type=float, default=60, help="default GUI camera fovy")
     # parser.add_argument('--light_theta', type=float, default=60, help="default GUI light direction in [0, 180], corresponding to elevation [90, -90]")
@@ -187,11 +190,13 @@ if __name__ == '__main__':
             raise NotImplementedError(f'--guidance {opt.guidance} is not implemented.')
 
         optimizer = lambda model: torch.optim.Adam(model.module.get_params(opt.lr), betas=(0.9, 0.99), eps=1e-15)
+        #optimizer = lambda model: Adan(model.module.get_params(opt.lr), betas=(0.9, 0.99), eps=1e-15)
         # optimizer = lambda model: Shampoo(model.get_params(opt.lr))
 
         train_loader = NeRFDataset(opt, device=device, type='train', H=opt.h, W=opt.w, size=100).dataloader()
 
-        scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter: 0.1 ** min(iter / opt.iters, 1))
+        scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter: 1e-3 if iter < 500 else  0.1 ** min(iter / opt.iters, 1))
+        #scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter:  0.1 ** min(iter / opt.iters, 1))
         # scheduler = lambda optimizer: optim.lr_scheduler.OneCycleLR(optimizer, max_lr=opt.lr, total_steps=opt.iters, pct_start=0.1)
 
         trainer = Trainer('df', opt, model, guidance, device=device, workspace=opt.workspace, optimizer=optimizer, ema_decay=0.95, fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint=opt.ckpt, eval_interval=opt.eval_interval, scheduler_update_every_step=True, wandb_obj = wandb)

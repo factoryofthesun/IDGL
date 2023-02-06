@@ -468,3 +468,4 @@ class Shampoo(optim.Optimizer):
 
         # Final update
         p.data.add_(momentum_update, alpha=-lr)    
+
