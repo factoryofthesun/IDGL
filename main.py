@@ -6,7 +6,7 @@ from nerf.utils import *
 from optimizer import Shampoo
 import wandb
 from pdb import set_trace
-torch.backends.cudnn.enabled = True 
+torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 # from nerf.gui import NeRFGUI
 
@@ -22,7 +22,7 @@ def clear_directory(path):
                 shutil.rmtree(file_path)
         except Exception as e:
             print('Failed to delete %s. Reason: %s' % (file_path, e))
-            
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -57,7 +57,7 @@ if __name__ == '__main__':
     parser.add_argument('--w', type=int, default=64, help="render width for NeRF in training")
     parser.add_argument('--h', type=int, default=64, help="render height for NeRF in training")
     parser.add_argument('--jitter_pose', action='store_true', help="add jitters to the randomly sampled camera poses")
-    
+
     ### dataset options
     parser.add_argument('--bound', type=float, default=1, help="assume the scene is bounded in box(-bound, bound)")
     parser.add_argument('--dt_gamma', type=float, default=0, help="dt_gamma (>=0) for adaptive ray marching. set to 0 to disable, >0 to accelerate rendering (but usually with worse quality)")
@@ -77,6 +77,7 @@ if __name__ == '__main__':
     parser.add_argument('--clip_grad', action='store_true', help="overwrite current experiment")
     parser.add_argument('--fine_tune_conditioner', action='store_true', help="overwrite current experiment")
     parser.add_argument('--clip_grad_val', default = 1.0, type=float, help="overwrite current experiment")
+    parser.add_argument('--ema_decay', default = None, type=float)
     parser.add_argument('--init', default = None)
     parser.add_argument('--normalization', type = str, default = 'No')
     parser.add_argument('--WN', type = str, default = None)
@@ -86,9 +87,10 @@ if __name__ == '__main__':
 
     ### Logging options
     parser.add_argument('--wandb_flag', action='store_true', help="log in wandb")
-    parser.add_argument('--project_name', type=str, default='test')    
-    parser.add_argument('--exp_name', type=str, default='test')    
+    parser.add_argument('--project_name', type=str, default='test')
+    parser.add_argument('--exp_name', type=str, default='test')
     parser.add_argument('--overwrite', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--testdir', type = str, default='inference')
 
     ###Network options
     parser.add_argument('--num_layers', type=int, default=3, help="render width for NeRF in training")
@@ -106,10 +108,10 @@ if __name__ == '__main__':
     parser.add_argument('--condition_trans', action = 'store_true')
     parser.add_argument('--phrasing', action = 'store_true')
     parser.add_argument('--curricullum', action = 'store_true')
-    
+
     #### Other option
     parser.add_argument('--mem', action='store_true', help="overwrite current experiment")
-    parser.add_argument('--dummy', action='store_true', help="overwrite current experiment") 
+    parser.add_argument('--dummy', action='store_true', help="overwrite current experiment")
     # parser.add_argument('--radius', type=float, default=3, help="default GUI camera radius from center")
     # parser.add_argument('--fovy', type=float, default=60, help="default GUI camera fovy")
     # parser.add_argument('--light_theta', type=float, default=60, help="default GUI light direction in [0, 180], corresponding to elevation [90, -90]")
@@ -122,10 +124,10 @@ if __name__ == '__main__':
     lines = [line.replace("\n", "") for line in lines]
     opt.text = lines
     print(opt.text)
-    opt.workspace = os.path.join("outputs", opt.project_name+'_'+opt.exp_name)
-    if opt.overwrite and os.path.exists(opt.workspace): 
+    opt.workspace = os.path.join("outputs", opt.project_name, opt.exp_name)
+    if opt.overwrite and os.path.exists(opt.workspace):
         clear_directory(opt.workspace)
-       
+
     if opt.wandb_flag:
         resume_flag = opt.ckpt == 'latest'
         wandb.init(project = opt.project_name,config = opt, resume = True, name = opt.exp_name, id = opt.exp_name)
@@ -174,11 +176,12 @@ if __name__ == '__main__':
         trainer = Trainer('df', opt, model, guidance, device=device, workspace=opt.workspace, fp16=opt.fp16, use_checkpoint=opt.ckpt)
 
         test_loader = NeRFDataset(opt, device=device, type='test', H=opt.H, W=opt.W, size=100).dataloader()
-        trainer.test(test_loader)
-        
+        for idx, val in enumerate(opt.text):
+            trainer.test(test_loader, save_path=os.path.join(opt.workspace, opt.testdir), scene_id=idx)
+
         if opt.save_mesh:
             trainer.save_mesh(resolution=256)
-    
+
     else:
         if opt.guidance == 'stable-diffusion':
             from nerf.sd import StableDiffusion
@@ -199,7 +202,7 @@ if __name__ == '__main__':
         #scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter:  0.1 ** min(iter / opt.iters, 1))
         # scheduler = lambda optimizer: optim.lr_scheduler.OneCycleLR(optimizer, max_lr=opt.lr, total_steps=opt.iters, pct_start=0.1)
 
-        trainer = Trainer('df', opt, model, guidance, device=device, workspace=opt.workspace, optimizer=optimizer, ema_decay=0.95, fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint=opt.ckpt, eval_interval=opt.eval_interval, scheduler_update_every_step=True, wandb_obj = wandb)
+        trainer = Trainer('df', opt, model, guidance, device=device, workspace=opt.workspace, optimizer=optimizer, ema_decay=opt.ema_decay, fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint=opt.ckpt, eval_interval=opt.eval_interval, scheduler_update_every_step=True, wandb_obj = wandb)
 
         valid_loader = NeRFDataset(opt, device=device, type='val', H=opt.H, W=opt.W, size=5).dataloader()
 
