@@ -421,7 +421,6 @@ class Trainer(object):
         if self.opt.dist_depth_loss:
             loss = loss +  self.opt.lambda_depth* ((outputs['depth'] - outputs['teacher_depth'])**2).mean()
              
-        set_trace()
 
         # print(shading)
         # torch_vis_2d(pred_rgb[0])
@@ -781,10 +780,10 @@ class Trainer(object):
             # update grid every 16 steps
             if self.model.module.cuda_ray and self.global_step % self.opt.update_extra_interval == 0:
                 with torch.cuda.amp.autocast(enabled=self.fp16):
-                    #for idx in range(self.opt.num_scenes):
-                    self.model.module.scene_id = 0
+                    for idx in range(self.opt.num_scenes):
+                        self.model.module.scene_id = idx
                     
-                    self.model.module.update_extra_state()
+                        self.model.module.update_extra_state(idx)
 
                     
             self.local_step += 1

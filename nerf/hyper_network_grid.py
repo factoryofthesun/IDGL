@@ -401,7 +401,7 @@ class HyperTransNeRFNetwork(NeRFRenderer):
                  teacher_flag = False
                  ):
         
-        super().__init__(opt)
+        super().__init__(opt, teacher_flag)
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
 
