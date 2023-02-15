@@ -386,7 +386,6 @@ if __name__ == '__main__':
         scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter: 1e-3 if iter < 500 else  0.1 ** min(iter / opt.iters, 1))
         #scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter:  0.1 ** min(iter / opt.iters, 1))
         # scheduler = lambda optimizer: optim.lr_scheduler.OneCycleLR(optimizer, max_lr=opt.lr, total_steps=opt.iters, pct_start=0.1)
-        set_trace()
         trainer = Trainer('df', opt, model, guidance, device=device, workspace=opt.workspace, optimizer=optimizer, ema_decay=opt.ema_decay, fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint=opt.ckpt, eval_interval=opt.eval_interval, scheduler_update_every_step=True, wandb_obj = wandb)
 
         valid_loader = NeRFDataset(opt, device=device, type='val', H=opt.H, W=opt.W, size=5).dataloader()
