@@ -229,21 +229,32 @@ class Trainer(object):
                 p.requires_grad = False
 
             self.text_z = {}
+            self.interp_z = {}
             for idx, val in enumerate(self.opt.text):
                 current_text = ref_text[idx]
                 if not self.opt.dir_text:
                     self.text_z[idx] = self.guidance.get_text_embeds([ref_text[idx]])
+
+                    if self.opt.interptext is not None:
+                        self.interp_z[idx] = self.guidance.get_text_embeds([self.opt.interptext[idx]])
                 else:
                     text_z_list = []
+                    interp_z_list = []
                     for d in ['front', 'side', 'back', 'side', 'overhead', 'bottom']:
                         text = f"{current_text}, {d} view"
                         #print(text)
                         text_z = self.guidance.get_text_embeds([text])
                         text_z_list.append(text_z)
-                        self.text_z[idx] = text_z_list
 
+                        if self.opt.interptext is not None:
+                            interp_z_list.append(self.guidance.get_text_embeds[self.opt.interptext[idx]])
+
+                    self.text_z[idx] = text_z_list
+                    if self.opt.interptext is not None:
+                        self.interp_z[idx] = interp_z_list
         else:
             self.text_z = None
+            self.interp_z = None
 
         if isinstance(criterion, nn.Module):
             criterion.to(self.device)
@@ -531,13 +542,17 @@ class Trainer(object):
         self.evaluate_one_epoch(loader, name)
         self.use_tensorboardX = use_tensorboardX
 
-    def test(self, loader, save_path=None, name=None, write_video=True, scene_id = None):
+    def test(self, loader, save_path=None, name=None, write_video=True, scene_id = None, interpval=0):
         # if scene_id == None:
         #     set_trace()
+        self.model.interpval = interpval
+        self.model.module.interpval = interpval
         self.model.module.scene_id = scene_id
-        self.epoch = 0
-        self.model.module.epoch = 0
-        self.model.module.sigma_net.epoch = 0
+        # NOTE: During inference self.epoch gets filled by the saved dictionary
+        self.model.module.epoch = self.epoch
+        self.model.module.sigma_net.epoch = self.epoch
+
+        print(f"Name: {name}, interpval: {interpval:0.2f}")
 
         if save_path is None:
             save_path = os.path.join(self.workspace, 'results')

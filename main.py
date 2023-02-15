@@ -1,6 +1,6 @@
 import torch
 import argparse
-
+from pathlib import Path
 from nerf.provider import NeRFDataset
 from nerf.utils import *
 from optimizer import Shampoo
@@ -26,15 +26,28 @@ def clear_directory(path):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--text', type=str, nargs="+", default=None, help="text prompt")
+    parser.add_argument('--engineer_prefix', type=str, default=None, help="prefix prompt")
+    parser.add_argument('--style', type=str, default=None, help="style prompt")
+    parser.add_argument('--object', type=str, default=None, help="object prompt")
+    parser.add_argument('--engineer_suffix', type=str, default=None, help="suffix prompt")
+    parser.add_argument('--poolstyle', action='store_true', help="pool the style tokens (color/obj separately)")
     parser.add_argument('-O', action='store_true', help="equals --fp16 --cuda_ray --dir_text")
     parser.add_argument('-O2', action='store_true', help="equals --fp16 --dir_text")
     parser.add_argument('--test', action='store_true', help="test mode")
+    parser.add_argument('--interp_engineer_prefix', type=str, default=None, help="text prompt")
+    parser.add_argument('--interp_style', type=str, default=None, help="text prompt")
+    parser.add_argument('--interp_object', type=str, default=None, help="text prompt")
+    parser.add_argument('--interp_engineer_suffix', type=str, default=None, help="text prompt")
+    parser.add_argument('--interp', type=str, default=None, choices={'bert', 'hyper'}, help="interpolation mode")
+    parser.add_argument('--interpfreq', type=int, default=2, help="interpolation frequencies (endpoint inclusive)")
+    parser.add_argument('--textindex', type=str, default=None, help="npy array containing indices to interpolate for txt file")
+    parser.add_argument('--interpindex', type=str, default=None, help="npy array containing indices to interpolate for interp file")
     parser.add_argument('--save_mesh', action='store_true', help="export an obj mesh with texture")
     parser.add_argument('--eval_interval', type=int, default=10, help="evaluate on the valid set every interval epochs")
     parser.add_argument('--workspace', type=str, default='workspace')
     parser.add_argument('--guidance', type=str, default='stable-diffusion', help='choose from [stable-diffusion, clip]')
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--debug', action='store_true', help="Debugging mode")
 
     ### training options
     parser.add_argument('--iters', type=int, default=10000, help="training iters")
@@ -118,12 +131,166 @@ if __name__ == '__main__':
     # parser.add_argument('--light_phi', type=float, default=0, help="default GUI light direction in [0, 360), azimuth")
     # parser.add_argument('--max_spp', type=int, default=1, help="GUI rendering max sample per pixel")
     opt = parser.parse_args()
+    opt.textstyleidx = None
+    opt.objstyleidx = None
+    opt.interpstyleidx = None
+    opt.interpobjidx = None
 
-    with open(opt.text[0]) as f:
-        lines = f.readlines()
-    lines = [line.replace("\n", "") for line in lines]
-    opt.text = lines
+    opt.text = []
+    if opt.engineer_prefix:
+        with open(opt.engineer_prefix) as f:
+            lines = f.readlines()
+        opt.text = [" ".join(line.split()) for line in lines]
+
+    if opt.style:
+        with open(opt.style) as f:
+            lines = f.readlines()
+
+        # Save starting indices of style prompt
+        if len(opt.text) == 0:
+            opt.textstyleidx = [0 for _ in range(len(lines))]
+        else:
+            opt.textstyleidx = [len(line.split()) for line in opt.text]
+
+        lines = [" ".join(line.split()) for line in lines]
+        opt.text = [opt.text[i] + " " + " ".join(lines[i].split())  for i in range(min(len(opt.text), len(lines)))]
+
+        # Save ending indices of style prompt
+        opt.textstyleidx = [(opt.textstyleidx[i], len(opt.text[i].split())-1) for i in range(len(opt.text))]
+
+    if opt.object:
+        with open(opt.object) as f:
+            lines = f.readlines()
+
+        # Save starting indices of obj prompt
+        opt.objstyleidx = [len(line.split()) for line in opt.text]
+
+        lines = [" ".join(line.split()) for line in lines]
+        opt.text = [opt.text[i] + " " + " ".join(lines[i].split())  for i in range(min(len(opt.text), len(lines)))]
+
+        # Save ending indices of obj prompt
+        opt.objstyleidx = [(opt.objstyleidx[i], len(opt.text[i].split())-1) for i in range(len(opt.text))]
+
+    if opt.engineer_suffix:
+        with open(opt.engineer_suffix) as f:
+            lines = f.readlines()
+        lines = [" ".join(line.split()) for line in lines]
+        opt.text = [opt.text[i] + " " + " ".join(lines[i].split()) for i in range(min(len(opt.text), len(lines)))]
+
+    opt.text = [" ".join(line.split()) for line in opt.text]
     print(opt.text)
+
+    # Interpolation file
+    interpvals = None
+    if opt.interp and opt.style:
+        opt.interptext = []
+        if opt.interp_engineer_prefix:
+            with open(opt.interp_engineer_prefix) as f:
+                lines = f.readlines()
+            opt.interptext = [" ".join(line.split()) for line in lines]
+
+        if opt.interp_style:
+            with open(opt.interp_style) as f:
+                lines = f.readlines()
+
+            # Save starting indices of style prompt
+            opt.interpstyleidx = [len(line.split()) for line in opt.interptext]
+
+            lines = [" ".join(line.split()) for line in lines]
+            opt.interptext = [opt.interptext[i] + " " + " ".join(lines[i].split())  for i in range(min(len(opt.interptext), len(lines)))]
+
+            # Save ending indices of style prompt
+            opt.interpstyleidx = [(opt.interpstyleidx[i], len(opt.interptext[i].split())-1) for i in range(len(opt.interptext))]
+
+        if opt.interp_object:
+            with open(opt.interp_object) as f:
+                lines = f.readlines()
+
+            # Save starting indices of obj prompt
+            opt.interpobjidx = [len(line.split()) for line in opt.interptext]
+
+            lines = [" ".join(line.split()) for line in lines]
+            opt.interptext = [opt.interptext[i] + " " + " ".join(lines[i].split())  for i in range(min(len(opt.interptext), len(lines)))]
+
+            # Save ending indices of obj prompt
+            opt.interpobjidx = [(opt.interpobjidx[i], len(opt.interptext[i].split())-1) for i in range(len(opt.interptext))]
+
+        if opt.interp_engineer_suffix:
+            with open(opt.interp_engineer_suffix) as f:
+                lines = f.readlines()
+            lines = [" ".join(line.split()) for line in lines]
+            opt.interptext = [opt.interptext[i] + " " + " ".join(lines[i].split()) for i in range(min(len(opt.interptext), len(lines)))]
+        opt.interptext = [" ".join(line.split()) for line in opt.interptext]
+
+        # Duplicate text for each possible pairing and also interpolation float value
+        interpvals = np.linspace(0, 1, opt.interpfreq)
+
+        # Map each individual text line to interptext * interpfreq values
+        textlen = len(opt.interptext)
+        interplen = len(opt.interptext)
+        opt.text = [text for text in opt.text for _ in range(interplen * opt.interpfreq)]
+
+        opt.objstyleidx = [text for text in opt.objstyleidx for _ in range(interplen * opt.interpfreq)]
+        opt.textstyleidx = [text for text in opt.textstyleidx for _ in range(interplen * opt.interpfreq)]
+
+        opt.interptext = [text for text in opt.interptext for _ in range(opt.interpfreq)]
+        opt.interptext *= textlen
+
+        opt.interpstyleidx = [idx for idx in opt.interpstyleidx for _ in range(opt.interpfreq)]
+        opt.interpstyleidx *= textlen
+        opt.interpobjidx = [idx for idx in opt.interpobjidx for _ in range(opt.interpfreq)]
+        opt.interpobjidx *= textlen
+
+        # Remove duplicates
+        assert len(opt.text) == len(opt.interptext), f"Expected text length {len(opt.text)} to equal interptext length {len(opt.interptext)}"
+        newtext = []
+        newinterp = []
+        new_textstyleidx = []
+        new_objstyleidx = []
+        new_interpstyleidx = []
+        new_interpobjidx = []
+        doneprompts = set()
+        for i in range(len(opt.text)):
+            if opt.text[i] + opt.interptext[i] in doneprompts or opt.interptext[i] + opt.text[i] in doneprompts:
+                continue
+            if opt.text[i] != opt.interptext[i]:
+                newtext.append(opt.text[i])
+                newinterp.append(opt.interptext[i])
+
+                new_textstyleidx.append(opt.textstyleidx[i])
+                new_objstyleidx.append(opt.objstyleidx[i])
+
+                new_interpstyleidx.append(opt.interpstyleidx[i])
+                new_interpobjidx.append(opt.interpobjidx[i])
+        if opt.debug:
+            print(f"Found {len(opt.text) - len(newtext)} duplicate prompts between text and interp")
+            promptset = [val for val in zip(newtext, newinterp)]
+            print(f"Prompt set: {promptset}")
+        opt.interptext = newinterp
+        opt.text = newtext
+        opt.textstyleidx = new_textstyleidx
+        opt.objstyleidx = new_objstyleidx
+        opt.interpstyleidx = new_interpstyleidx
+        opt.interpobjidx = new_interpobjidx
+    else:
+        opt.interp = None
+        opt.interpfreq = None
+        opt.interptext = None
+        opt.textstyleidx = None
+        opt.objstyleidx = None
+        opt.interpstyleidx = None
+        opt.interpobjidx = None
+        interpvals = None
+
+    # Load style idx
+    # if opt.interp == "bert":
+    #     assert os.path.exists(opt.textindex) and os.path.exists(opt.interpindex), f"If interpolation over bert vectors, then files opt.textindex {opt.textindex} and opt.interpindex {opt.interpindex} must exist."
+
+    if opt.textindex:
+        opt.textindex = np.load(opt.textindex)
+    if opt.interpindex:
+        opt.interpindex = np.load(opt.interpindex)
+
     opt.workspace = os.path.join("outputs", opt.project_name, opt.exp_name)
     if opt.overwrite and os.path.exists(opt.workspace):
         clear_directory(opt.workspace)
@@ -175,9 +342,27 @@ if __name__ == '__main__':
 
         trainer = Trainer('df', opt, model, guidance, device=device, workspace=opt.workspace, fp16=opt.fp16, use_checkpoint=opt.ckpt)
 
-        test_loader = NeRFDataset(opt, device=device, type='test', H=opt.H, W=opt.W, size=100).dataloader()
+        size = 100
+        if opt.debug:
+            size = 10
+        test_loader = NeRFDataset(opt, device=device, type='test', H=opt.H, W=opt.W, size=size).dataloader()
+        Path(os.path.join(opt.workspace, opt.testdir)).mkdir(exist_ok=True, parents=True)
+        clear_directory(os.path.join(opt.workspace, opt.testdir))
         for idx, val in enumerate(opt.text):
-            trainer.test(test_loader, save_path=os.path.join(opt.workspace, opt.testdir), scene_id=idx)
+            interpval = None
+            if interpvals is not None:
+                interpval = interpvals[idx % len(interpvals)]
+
+            if opt.debug:
+                print(f"Scene id: {idx}, Text: {val}, Interpval: {interpval}")
+            name = val.lower().replace(" ", "_")
+            if interpvals is not None:
+                name = val.lower().replace(" ", "_") + f"_interp{interpval:0.2f}_" + opt.interptext[idx].lower().replace(" ", "_")
+                if opt.phrasing:
+                    name = "phrasing_" + name
+
+            trainer.test(test_loader, name=name, save_path=os.path.join(opt.workspace, opt.testdir),
+                         scene_id=idx, interpval=interpval)
 
         if opt.save_mesh:
             trainer.save_mesh(resolution=256)
@@ -201,7 +386,7 @@ if __name__ == '__main__':
         scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter: 1e-3 if iter < 500 else  0.1 ** min(iter / opt.iters, 1))
         #scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter:  0.1 ** min(iter / opt.iters, 1))
         # scheduler = lambda optimizer: optim.lr_scheduler.OneCycleLR(optimizer, max_lr=opt.lr, total_steps=opt.iters, pct_start=0.1)
-
+        set_trace()
         trainer = Trainer('df', opt, model, guidance, device=device, workspace=opt.workspace, optimizer=optimizer, ema_decay=opt.ema_decay, fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint=opt.ckpt, eval_interval=opt.eval_interval, scheduler_update_every_step=True, wandb_obj = wandb)
 
         valid_loader = NeRFDataset(opt, device=device, type='val', H=opt.H, W=opt.W, size=5).dataloader()
