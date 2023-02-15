@@ -1,4 +1,4 @@
-import os
+mport os
 import math
 import cv2
 import trimesh
@@ -84,8 +84,8 @@ class NeRFRenderer(nn.Module):
         # extra state for cuda raymarching
         if self.cuda_ray:
             # density grid
-            density_grid = torch.ones([self.cascade, self.grid_size ** 3]) # [CAS, H * H * H]
-            density_bitfield = torch.ones(self.cascade * self.grid_size ** 3 // 8, dtype=torch.uint8) # [CAS * H * H * H // 8]
+            density_grid = torch.zeros([self.cascade, self.grid_size ** 3]) # [CAS, H * H * H]
+            density_bitfield = torch.zeros(self.cascade * self.grid_size ** 3 // 8, dtype=torch.uint8) # [CAS * H * H * H // 8]
             self.register_buffer('density_grid', density_grid)
             self.register_buffer('density_bitfield', density_bitfield)
             self.mean_density = 0
@@ -298,27 +298,6 @@ class NeRFRenderer(nn.Module):
 
         _export(v, f)
 
-
-    def get_new_xyzs(self, z_vals, sample_dist, density_outputs,upsample_steps, rays_o, rays_d, aabb):
-
-        deltas = z_vals[..., 1:] - z_vals[..., :-1] # [N, T-1]
-
-        deltas = torch.cat([deltas, sample_dist * torch.ones_like(deltas[..., :1])], dim=-1)
-
-        alphas = 1 - torch.exp(-deltas * density_outputs['sigma'].squeeze(-1)) # [N, T]
-        alphas_shifted = torch.cat([torch.ones_like(alphas[..., :1]), 1 - alphas + 1e-15], dim=-1) # [N, T+1]
-        weights = alphas * torch.cumprod(alphas_shifted, dim=-1)[..., :-1] # [N, T]
-
-        # sample new z_vals
-        z_vals_mid = (z_vals[..., :-1] + 0.5 * deltas[..., :-1]) # [N, T-1]
-        new_z_vals = sample_pdf(z_vals_mid, weights[:, 1:-1], upsample_steps, det=not self.training).detach() # [N, t]
-
-        new_xyzs = rays_o.unsqueeze(-2) + rays_d.unsqueeze(-2) * new_z_vals.unsqueeze(-1) # [N, 1, 3] * [N, t, 1] -> [N, t, 3]
-        new_xyzs = torch.min(torch.max(new_xyzs, aabb[:3]), aabb[3:]) 
-
-        return new_xyzs, new_z_vals
-
-
     def run(self, rays_o, rays_d, num_steps=128, upsample_steps=128, light_d=None, ambient_ratio=1.0, shading='albedo', bg_color=None, perturb=False, **kwargs):
         # rays_o, rays_d: [B, N, 3], assumes B == 1
         # bg_color: [BN, 3] in range [0, 1]
@@ -368,26 +347,14 @@ class NeRFRenderer(nn.Module):
         # query SDF and RGB
         density_outputs = self.density(xyzs.reshape(-1, 3))
 
-
         #sigmas = density_outputs['sigma'].view(N, num_steps) # [N, T]
         for k, v in density_outputs.items():
             density_outputs[k] = v.view(N, num_steps, -1)
-
-
-        if self.teacher_models is not None and self.training:
-            with torch.no_grad():
-                density_outputs_teacher = self.teacher_models[self.scene_id].module.density(xyzs.reshape(-1,3))
-            for k, v in density_outputs_teacher.items():
-                 density_outputs_teacher[k] = v.view(N, num_steps, -1)
-
 
         # upsample z_vals (nerf-like)
         if upsample_steps > 0:
             with torch.no_grad():
 
-                new_xyzs, new_z_vals  = self.get_new_xyzs(z_vals, sample_dist, density_outputs, upsample_steps, rays_o, rays_d,aabb)
-                new_xyzs_teacher, new_z_vals_teacher = self.get_new_xyzs(z_vals, sample_dist, density_outputs_teacher, upsample_steps, rays_o, rays_d,aabb)
-                '''
                 deltas = z_vals[..., 1:] - z_vals[..., :-1] # [N, T-1]
                 deltas = torch.cat([deltas, sample_dist * torch.ones_like(deltas[..., :1])], dim=-1)
 
@@ -401,25 +368,12 @@ class NeRFRenderer(nn.Module):
 
                 new_xyzs = rays_o.unsqueeze(-2) + rays_d.unsqueeze(-2) * new_z_vals.unsqueeze(-1) # [N, 1, 3] * [N, t, 1] -> [N, t, 3]
                 new_xyzs = torch.min(torch.max(new_xyzs, aabb[:3]), aabb[3:]) # a manual clip.
-                set_trace()
-                print("here")
-                '''
 
             # only forward new points to save computation
-
-
             new_density_outputs = self.density(new_xyzs.reshape(-1, 3))
-
-
-            with torch.no_grad():
-                new_density_outputs_teacher = self.teacher_models[self.scene_id].module.density(new_xyzs_teacher.reshape(-1, 3))
             #new_sigmas = new_density_outputs['sigma'].view(N, upsample_steps) # [N, t]
             for k, v in new_density_outputs.items():
                 new_density_outputs[k] = v.view(N, upsample_steps, -1)
-
-
-            for k, v in new_density_outputs_teacher.items():
-                new_density_outputs_teacher[k] = v.view(N, upsample_steps, -1)
 
             # re-order
             z_vals = torch.cat([z_vals, new_z_vals], dim=1) # [N, T+t]
@@ -430,41 +384,20 @@ class NeRFRenderer(nn.Module):
 
             for k in density_outputs:
                 tmp_output = torch.cat([density_outputs[k], new_density_outputs[k]], dim=1)
-                tmp_output_teacher = torch.cat([density_outputs_teacher[k], new_density_outputs_teacher[k]], dim=1) 
-
                 density_outputs[k] = torch.gather(tmp_output, dim=1, index=z_index.unsqueeze(-1).expand_as(tmp_output))
-                density_outputs_teacher[k] = torch.gather(tmp_output_teacher, dim=1, index=z_index.unsqueeze(-1).expand_as(tmp_output_teacher))
-
-             
-
 
         deltas = z_vals[..., 1:] - z_vals[..., :-1] # [N, T+t-1]
         deltas = torch.cat([deltas, sample_dist * torch.ones_like(deltas[..., :1])], dim=-1)
-        alphas = 1 - torch.exp(-deltas * density_outputs['sigma'].squeeze(-1)) # [N, T+t]i
-
+        alphas = 1 - torch.exp(-deltas * density_outputs['sigma'].squeeze(-1)) # [N, T+t]
         alphas_shifted = torch.cat([torch.ones_like(alphas[..., :1]), 1 - alphas + 1e-15], dim=-1) # [N, T+t+1]
         weights = alphas * torch.cumprod(alphas_shifted, dim=-1)[..., :-1] # [N, T+t]
-
-        alphas_teacher = 1 - torch.exp(-deltas * density_outputs_teacher['sigma'].squeeze(-1))
-        alphas_shifted_teacher = torch.cat([torch.ones_like(alphas_teacher[..., :1]), 1 - alphas_teacher + 1e-15], dim=-1) # [N, T+t+1]
-        weights_teacher = alphas_teacher * torch.cumprod(alphas_shifted_teacher, dim=-1)[..., :-1]
-
 
         dirs = rays_d.view(-1, 1, 3).expand_as(xyzs)
         for k, v in density_outputs.items():
             density_outputs[k] = v.view(-1, v.shape[-1])
 
-        for k, v in density_outputs_teacher.items():
-            density_outputs_teacher[k] = v.view(-1, v.shape[-1])
-
-
         sigmas, rgbs, normals = self(xyzs.reshape(-1, 3), dirs.reshape(-1, 3), light_d, ratio=ambient_ratio, shading=shading)
-        with torch.no_grad():
-
-            sigmas_teacher, rgbs_teacher, normals_teacher = self.teacher_models[self.scene_id](xyzs.reshape(-1, 3), dirs.reshape(-1, 3), light_d, ratio=ambient_ratio, shading=shading)
-
         rgbs = rgbs.view(N, -1, 3) # [N, T+t, 3]
-        rgbs_teacher = rgbs_teacher.view(N, -1, 3) # [N, T+t, 3]
 
         #print(xyzs.shape, 'valid_rgb:', mask.sum().item())
         # orientation loss
@@ -476,47 +409,33 @@ class NeRFRenderer(nn.Module):
 
         # calculate weight_sum (mask)
         weights_sum = weights.sum(dim=-1) # [N]
-        weights_sum_teacher = weights_teacher.sum(dim=-1)
         
         # calculate depth 
         ori_z_vals = ((z_vals - nears) / (fars - nears)).clamp(0, 1)
         depth = torch.sum(weights * ori_z_vals, dim=-1)
-        depth_teacher = torch.sum(weights_teacher * ori_z_vals, dim=-1)
 
         # calculate color
         image = torch.sum(weights.unsqueeze(-1) * rgbs, dim=-2) # [N, 3], in [0, 1]
-        image_teacher = torch.sum(weights_teacher.unsqueeze(-1) * rgbs_teacher, dim=-2) # [N, 3], in [0, 1]
+
         # mix background color
         if self.bg_radius > 0:
             # use the bg model to calculate bg_color
             # sph = raymarching.sph_from_ray(rays_o, rays_d, self.bg_radius) # [N, 2] in [-1, 1]
-            bg_color = self.background(rays_d.reshape(-1, 3)) # [N, 3]i
-            with torch.no_grad():
-                bg_color_teacher = self.teacher_models[self.scene_id].module.background(rays_d.reshape(-1, 3)) # [N, 3]i
+            bg_color = self.background(rays_d.reshape(-1, 3)) # [N, 3]
         elif bg_color is None:
             bg_color = 1
             
         image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
-        image_teacher = image_teacher + (1- weights_sum_teacher).unsqueeze(-1) + bg_color_teacher
 
         image = image.view(*prefix, 3)
-        image_teacher = image_teacher.view(*prefix,3)
-
         depth = depth.view(*prefix)
-        depth_teacher = depth_teacher.view(*prefix)
 
         mask = (nears < fars).reshape(*prefix)
-        mask_teacher = (nears <fars).reshape(*prefix)
 
         results['image'] = image
         results['depth'] = depth
         results['weights_sum'] = weights_sum
         results['mask'] = mask
-
-        results['teacher_image'] = image_teacher
-        results['teacher_depth'] = depth_teacher
-        results['teacher_weights_sum'] = weights_sum_teacher
-        results['teacher_mask'] = mask_teacher
 
         return results
 
@@ -558,7 +477,8 @@ class NeRFRenderer(nn.Module):
             if self.opt.dist_sigma_rgb_loss or self.opt.dist_image_loss or self.opt.dist_depth_loss:
                 sigmas_teacher, rbgs_teacher, normals_teacher = self.teacher_models[self.scene_id](xyzs, dirs, light_d, ratio=ambient_ratio, shading=shading)
 
-                 
+            set_trace() 
+           
 
             #set_trace()
             #replicas = nn.parallel.replicate(self,[0,1])
@@ -566,11 +486,6 @@ class NeRFRenderer(nn.Module):
             #print(f'valid RGB query ratio: {mask.sum().item() / mask.shape[0]} (total = {mask.sum().item()})')
 
             weights_sum, depth, image = raymarching.composite_rays_train(sigmas, rgbs, deltas, rays, T_thresh)
-
-            if self.opt.dist_sigma_rgb_loss or self.opt.dist_image_loss or self.opt.dist_depth_loss:
-                weights_sum_teacher, depth_teacher, image_teacher = raymarching.composite_rays_train(sigmas_teacher, rbgs_teacher, deltas, rays, T_thresh)                
-
-            
 
             # orientation loss
             if normals is not None:
@@ -618,17 +533,10 @@ class NeRFRenderer(nn.Module):
 
         # mix background color
         if self.bg_radius > 0:
-            bg_color = self.background(rays_d) # [N, 3]
-            if self.opt.dist_image_loss and self.training:
-                bg_color_teacher = self.teacher_models[self.scene_id].module.background(rays_d)
-                image_teacher = image_teacher + (1 - weights_sum_teacher).unsqueeze(-1) * bg_color_teacher
-                image_teacher = image_teacher.view(*prefix,3)
-
-                depth_teacher = torch.clamp(depth_teacher - nears, min =0)/ (fars - nears)
-                depth_teacher = depth_teacher.view(*prefix)               
-                
+            
             # use the bg model to calculate bg_color
             # sph = raymarching.sph_from_ray(rays_o, rays_d, self.bg_radius) # [N, 2] in [-1, 1]
+            bg_color = self.background(rays_d) # [N, 3]
 
         elif bg_color is None:
             bg_color = 1
@@ -647,14 +555,6 @@ class NeRFRenderer(nn.Module):
         results['depth'] = depth
         results['weights_sum'] = weights_sum
         results['mask'] = mask
-
-        if self.training and (self.opt.dist_sigma_rgb_loss or self.opt.dist_image_loss or self.opt.dist_depth_loss):
-            results['rbgs'] = rgbs
-            results['sigmas'] = sigmas
-            results['teacher_rbgs'] = rbgs_teacher
-            results['teacher_sigmas'] = sigmas_teacher
-            results['teacher_depth'] = depth_teacher
-            results['teacher_image'] = image_teacher
 
         return results
 
