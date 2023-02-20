@@ -114,7 +114,7 @@ if __name__ == '__main__':
 
     ### Distillation options
     parser.add_argument('--load_teachers', type=str, default=None)
-    
+    parser.add_argument('--teacher_size', type = int, default = 1 ) 
     #### Other option
     parser.add_argument('--mem', action='store_true', help="overwrite current experiment")
     parser.add_argument('--dummy', action='store_true', help="overwrite current experiment")
@@ -123,6 +123,7 @@ if __name__ == '__main__':
     parser.add_argument('--dist_image_loss', action='store_true', help="overwrite current experiment")
     parser.add_argument('--dist_sigma_rgb_loss', action='store_true', help="overwrite current experiment")
     parser.add_argument('--dist_depth_loss', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--skip_list', nargs='+', type = int, default = None)
     # parser.add_argument('--radius', type=float, default=3, help="default GUI camera radius from center")
     # parser.add_argument('--fovy', type=float, default=60, help="default GUI camera fovy")
     # parser.add_argument('--light_theta', type=float, default=60, help="default GUI light direction in [0, 180], corresponding to elevation [90, -90]")
@@ -192,19 +193,22 @@ if __name__ == '__main__':
             model_path =  glob.glob(opt.teacher_paths[idx]+"/checkpoints/*")[-1]
             model_teacher = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim,wandb_obj=wandb, teacher_flag = True), device_ids = [0])
         #TODO fix these
-            model_teacher.module.scene_id = idx
+            
+            #model_teacher.module.scene_id = idx
             model_teacher.module.sigma_net.epoch = 0
             model_teacher.module.load_checkpoint( checkpoint = model_path)
             model.teacher_models.append(model_teacher)
             if opt.test_teachers:
-                #model_teacher.module.scene_id = idx
-                model_teacher.module.load_checkpoint( checkpoint = model_path)
-                from nerf.sd import StableDiffusion
-                guidance = StableDiffusion('cuda')
-                trainer = Trainer('df', opt, model_teacher, guidance, device='cuda', workspace=opt.workspace, fp16=opt.fp16, use_checkpoint='scratch')
-                test_loader = NeRFDataset(opt, device='cuda', type='test', H=opt.H, W=opt.W, size=100).dataloader()
-                model_teacher.module.sigma_net.epoch = 0
-                trainer.test(test_loader, scene_id = idx)
+                for index in range(opt.num_scenes):
+                    model_teacher.module.scene_id = index % opt.teacher_size
+                    #model_teacher.module.scene_id = idx
+                    model_teacher.module.load_checkpoint( checkpoint = model_path)
+                    from nerf.sd import StableDiffusion
+                    guidance = StableDiffusion('cuda')
+                    trainer = Trainer('df', opt, model_teacher, guidance, device='cuda', workspace=opt.workspace, fp16=opt.fp16, use_checkpoint='scratch')
+                    test_loader = NeRFDataset(opt, device='cuda', type='test', H=opt.H, W=opt.W, size=100).dataloader()
+                    model_teacher.module.sigma_net.epoch = 0
+                    trainer.test(test_loader, scene_id = idx)
     
 
      
