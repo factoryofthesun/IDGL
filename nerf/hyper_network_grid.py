@@ -307,6 +307,7 @@ class MLP(nn.Module):
         #if epoch ==11:
         if self.hyper_flag:# and conditioning_vector is not None:
             if conditioning_vector is None:
+                set_trace()
                 params = self.hyper_transformer(self.hyper_inp)
             else:
                 processed_tokens = self.hyper_transform(conditioning_vector[scene_id]['input_tokens'].squeeze(0))
@@ -314,6 +315,7 @@ class MLP(nn.Module):
                     params = self.hyper_transformer(processed_tokens)
                 else:
                     processed_scene_vec = self.hyper_transformer.get_scene_vec(processed_tokens) 
+         
             #self.set_params(params)
         hyper_inp = None
         for l in range(self.num_layers):
@@ -461,6 +463,7 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             self.conditioning_vector = None
 
         self.encoder, self.in_dim = get_encoder('tiledgrid', input_dim=3, desired_resolution=2048 * self.bound)
+        
 
         self.sigma_net = nn.DataParallel(MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True, init= opt.init, opt = opt, wandb_obj = wandb_obj, hyper_flag = True))
         #self.sigma_net = MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True)

@@ -34,6 +34,7 @@ import wandb
 from pdb import set_trace
 import GPUtil
 import gc
+from scipy.stats import bernoulli
 
 torch.backends.cudnn.benchmark = True    
 torch.backends.cudnn.enabled = True 
@@ -344,8 +345,15 @@ class Trainer(object):
         #print(dict(self.model.module.sigma_net.named_parameters())['module.hyper_transformer.wtoken_postfc.layer_4.0.weight'].norm())        
         #print(dict(self.model.module.text_model.named_parameters())['encoder.layer.10.attention.self.key.weight'].norm())
         self.model.module.scene_id = scene_id
+
+
+
         if self.opt.load_teachers:
             self.model.module.teacher_models = self.model.teacher_models
+
+            for model_j in self.model.module.teacher_models:
+                model_j.module.scene_id = scene_id
+
         #check = self.model.module.get_conditioning_vec(index= scene_id)
         #if scene_id == 0:
         #    set_trace()
@@ -554,11 +562,13 @@ class Trainer(object):
                 self.save_checkpoint(full=True, best=False)
 
             #GPUtil.showUtilization()
+            X = bernoulli(.08) 
             if self.epoch % self.eval_interval == 0:
                 for idx, val in enumerate(self.text_z):
                     self.evaluate_one_epoch(valid_loader, scene_id= idx)
                     self.save_checkpoint(full=False, best=True)
-                    self.test(test_loader, scene_id = idx)               
+                    if X.rvs(1)[0] ==1:
+                        self.test(test_loader, scene_id = idx)               
             #GPUtil.showUtilization()
 
 
@@ -793,7 +803,11 @@ class Trainer(object):
             meta_bs = min(len(self.text_z), self.opt.meta_batch_size)
 
             #TODO: revert
-            scene_ids = random.sample(list(range(0,len(self.text_z)))[:num_objects], min(self.opt.meta_batch_size, len(list(range(0,len(self.text_z)))[:num_objects])))
+            if self.opt.skip_list is None: 
+                scene_ids = random.sample(list(range(0,len(self.text_z)))[:num_objects], min(self.opt.meta_batch_size, len(list(range(0,len(self.text_z)))[:num_objects])))
+            else:
+                train_scenes = list(set(list(range(0,len(self.text_z)))[:num_objects]) - set(self.opt.skip_list))
+                scene_ids = random.sample(train_scenes, min(self.opt.meta_batch_size, len(train_scenes))) 
             #scene_ids = [1]
 
             #scene_id = torch.bernoulli(torch.tensor([0.0]))
@@ -970,6 +984,8 @@ class Trainer(object):
             'epoch': self.epoch,
             'global_step': self.global_step,
             'stats': self.stats,
+            'num_scenes': self.opt.num_scenes
+            
         }
 
         if self.model.module.cuda_ray:
@@ -1053,7 +1069,8 @@ class Trainer(object):
                 self.model.module.mean_count = checkpoint_dict['mean_count']
             if 'mean_density' in checkpoint_dict:
                 self.model.module.mean_density = checkpoint_dict['mean_density']
-
+        
+        self.model.module.num_scenes = checkpoint_dict['num_scenes']
         if model_only:
             return
 
