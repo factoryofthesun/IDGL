@@ -6,6 +6,9 @@ from nerf.utils import *
 from optimizer import Shampoo
 import wandb
 from pdb import set_trace
+import copy
+torch.backends.cudnn.enabled = True 
+torch.backends.cudnn.benchmark = True
 # from nerf.gui import NeRFGUI
 
 # torch.autograd.set_detect_anomaly(True)
@@ -69,10 +72,15 @@ if __name__ == '__main__':
     parser.add_argument('--lambda_entropy', type=float, default=1e-4, help="loss scale for alpha entropy")
     parser.add_argument('--lambda_opacity', type=float, default=0, help="loss scale for alpha value")
     parser.add_argument('--lambda_orient', type=float, default=1e-2, help="loss scale for orientation")
-
+    parser.add_argument('--lambda_stable_diff', type=float, default=1, help="loss scale for alpha entropy")
+    parser.add_argument('--lambda_teacher_image', type=float, default=1, help="loss scale for alpha value")
+    parser.add_argument('--lambda_rgb', type=float, default=1, help="loss scale for alpha entropy")
+    parser.add_argument('--lambda_sigma', type=float, default=1, help="loss scale for alpha value")
+    parser.add_argument('--lambda_depth', type=float, default=1, help="loss scale for alpha entropy")
 
     ### stable training options
     parser.add_argument('--clip_grad', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--fine_tune_conditioner', action='store_true', help="overwrite current experiment")
     parser.add_argument('--clip_grad_val', default = 1.0, type=float, help="overwrite current experiment")
     parser.add_argument('--init', default = None)
     parser.add_argument('--normalization', type = str, default = 'No')
@@ -90,33 +98,52 @@ if __name__ == '__main__':
     ###Network options
     parser.add_argument('--num_layers', type=int, default=3, help="render width for NeRF in training")
     parser.add_argument('--hidden_dim', type=int, default=64, help="render width for NeRF in training")
+    parser.add_argument('--pos_enc_ins', type=int, default=0, help="render width for NeRF in training")
     parser.add_argument('--skip', action = 'store_true')
     parser.add_argument('--bottleneck', action = 'store_true')
+    parser.add_argument('--arch', type = str, default='mlp')
     ### Conditioning options
     parser.add_argument('--conditioning_model', type=str, default=None)
+    parser.add_argument('--conditioning_mode', type=str, default='sum')
+    parser.add_argument('--conditioning_dim', type = int, default = 0 )
+    parser.add_argument('--meta_batch_size', type = int, default = 1)
+    parser.add_argument('--multiple_conditioning_transformers', action = 'store_true')
+    parser.add_argument('--condition_trans', action = 'store_true')
+    parser.add_argument('--phrasing', action = 'store_true')
+    parser.add_argument('--curricullum', action = 'store_true')
 
-
+    ### Distillation options
+    parser.add_argument('--load_teachers', type=str, default=None)
+    parser.add_argument('--teacher_size', type = int, default = 1 ) 
     #### Other option
     parser.add_argument('--mem', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--dummy', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--test_teachers', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--not_diff_loss', action='store_true', help="overwrite current experiment") 
+    parser.add_argument('--dist_image_loss', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--dist_sigma_rgb_loss', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--dist_depth_loss', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--skip_list', nargs='+', type = int, default = None)
     # parser.add_argument('--radius', type=float, default=3, help="default GUI camera radius from center")
     # parser.add_argument('--fovy', type=float, default=60, help="default GUI camera fovy")
     # parser.add_argument('--light_theta', type=float, default=60, help="default GUI light direction in [0, 180], corresponding to elevation [90, -90]")
     # parser.add_argument('--light_phi', type=float, default=0, help="default GUI light direction in [0, 360), azimuth")
     # parser.add_argument('--max_spp', type=int, default=1, help="GUI rendering max sample per pixel")
     opt = parser.parse_args()
-
     with open(opt.text[0]) as f:
         lines = f.readlines()
     lines = [line.replace("\n", "") for line in lines]
     opt.text = lines
+   
+    opt.num_scenes = len(opt.text) 
     print(opt.text)
-
     opt.workspace = os.path.join("outputs", opt.project_name+'_'+opt.exp_name)
     if opt.overwrite and os.path.exists(opt.workspace): 
         clear_directory(opt.workspace)
-        
+       
     if opt.wandb_flag:
-        wandb.init(project = opt.project_name,config = opt, resume = opt.ckpt is 'latest', name = opt.exp_name)
+        resume_flag = opt.ckpt == 'latest'
+        wandb.init(project = opt.project_name,config = opt, resume = True, name = opt.exp_name, id = opt.exp_name)
     else:
         wandb = None
     if opt.O:
@@ -145,12 +172,47 @@ if __name__ == '__main__':
     print(opt)
 
     seed_everything(opt.seed)
+    if  'hyper_transformer' in opt.arch:
+       from nerf.hyper_network_grid import HyperTransNeRFNetwork as NeRFNetwork
 
     if True:
-        model = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim), device_ids = [0])
+        model = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim,wandb_obj=wandb ), device_ids = [0])
     else:
         model = NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim)
-    print(model)
+
+
+    if opt.load_teachers is not None: 
+        with open(opt.load_teachers) as f:
+            lines = f.readlines()
+        lines = [line.replace("\n", "") for line in lines]
+        opt.teacher_paths = lines
+
+        model.teacher_models = []
+        for idx, path in enumerate(opt.teacher_paths):
+            print(path) 
+            model_path =  glob.glob(opt.teacher_paths[idx]+"/checkpoints/*")[-1]
+            model_teacher = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim,wandb_obj=wandb, teacher_flag = True), device_ids = [0])
+        #TODO fix these
+            
+            #model_teacher.module.scene_id = idx
+            model_teacher.module.sigma_net.epoch = 0
+            model_teacher.module.load_checkpoint( checkpoint = model_path)
+            model.teacher_models.append(model_teacher)
+            if opt.test_teachers:
+                for index in range(opt.num_scenes):
+                    model_teacher.module.scene_id = index % opt.teacher_size
+                    #model_teacher.module.scene_id = idx
+                    model_teacher.module.load_checkpoint( checkpoint = model_path)
+                    from nerf.sd import StableDiffusion
+                    guidance = StableDiffusion('cuda')
+                    trainer = Trainer('df', opt, model_teacher, guidance, device='cuda', workspace=opt.workspace, fp16=opt.fp16, use_checkpoint='scratch')
+                    test_loader = NeRFDataset(opt, device='cuda', type='test', H=opt.H, W=opt.W, size=100).dataloader()
+                    model_teacher.module.sigma_net.epoch = 0
+                    trainer.test(test_loader, scene_id = idx)
+    
+
+     
+    #print(model)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -176,11 +238,13 @@ if __name__ == '__main__':
             raise NotImplementedError(f'--guidance {opt.guidance} is not implemented.')
 
         optimizer = lambda model: torch.optim.Adam(model.module.get_params(opt.lr), betas=(0.9, 0.99), eps=1e-15)
+        #optimizer = lambda model: Adan(model.module.get_params(opt.lr), betas=(0.9, 0.99), eps=1e-15)
         # optimizer = lambda model: Shampoo(model.get_params(opt.lr))
 
         train_loader = NeRFDataset(opt, device=device, type='train', H=opt.h, W=opt.w, size=100).dataloader()
 
-        scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter: 0.1 ** min(iter / opt.iters, 1))
+        scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter: 1e-3 if iter < 100 else  0.1 ** min(iter / opt.iters, 1))
+        #scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter:  0.1 ** min(iter / opt.iters, 1))
         # scheduler = lambda optimizer: optim.lr_scheduler.OneCycleLR(optimizer, max_lr=opt.lr, total_steps=opt.iters, pct_start=0.1)
 
         trainer = Trainer('df', opt, model, guidance, device=device, workspace=opt.workspace, optimizer=optimizer, ema_decay=0.95, fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint=opt.ckpt, eval_interval=opt.eval_interval, scheduler_update_every_step=True, wandb_obj = wandb)
@@ -189,6 +253,7 @@ if __name__ == '__main__':
 
         max_epoch = np.ceil(opt.iters / len(train_loader)).astype(np.int32)
         test_loader = NeRFDataset(opt, device=device, type='test', H=opt.H, W=opt.W, size=100).dataloader()
+
         trainer.train(train_loader, valid_loader,test_loader, max_epoch)
 
         # also test

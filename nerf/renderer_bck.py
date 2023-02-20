@@ -83,30 +83,22 @@ class NeRFRenderer(nn.Module):
         self.register_buffer('aabb_infer', aabb_infer)
 
         # extra state for cuda raymarching
-        if self.teacher_flag:
-            num_scenes = self.opt.teacher_size
-            
-        else:
-            num_scenes = self.opt.num_scenes
-        self.num_scenes = num_scenes
         if self.cuda_ray:
             # density grid
-            if True:
+            if not teacher_flag:
 
-                self.density_grid =  [torch.zeros([self.cascade, self.grid_size ** 3]).cuda()  for i in range(opt.num_scenes)]# [CAS, H * H * H]
-                self.density_bitfield =  [torch.zeros(self.cascade * self.grid_size ** 3 // 8, dtype=torch.uint8).cuda() for i in range(opt.num_scenes) ]# [CAS * H * H * H // 8]
-                #self.register_buffer('density_grid', density_grid)
-                #self.register_buffer('density_bitfield', density_bitfield)
+                density_grid =  torch.zeros([opt.num_scenes,self.cascade, self.grid_size ** 3]) # [CAS, H * H * H]
+                density_bitfield =  torch.zeros(opt.num_scenes,self.cascade * self.grid_size ** 3 // 8, dtype=torch.uint8) # [CAS * H * H * H // 8]
+                self.register_buffer('density_grid', density_grid)
+                self.register_buffer('density_bitfield', density_bitfield)
             
-                self.mean_density = torch.zeros(num_scenes)
-                self.iter_density = torch.zeros(num_scenes)
+                self.mean_density = torch.zeros(opt.num_scenes)
+                self.iter_density = torch.zeros(opt.num_scenes)
                 # step counter
-                step_counter = torch.zeros(num_scenes, 16, 2, dtype=torch.int32) # 16 is hardcoded for averaging...
+                step_counter = torch.zeros(opt.num_scenes, 16, 2, dtype=torch.int32) # 16 is hardcoded for averaging...
                 self.register_buffer('step_counter', step_counter)
-                self.mean_count = torch.zeros(num_scenes) 
-                self.local_step = torch.zeros(num_scenes)
-
-
+                self.mean_count = 0
+                self.local_step = 0
             else:
                 density_grid =  torch.zeros([self.cascade, self.grid_size ** 3]) # [CAS, H * H * H]
                 density_bitfield =  torch.zeros(self.cascade * self.grid_size ** 3 // 8, dtype=torch.uint8) # [CAS * H * H * H // 8]
@@ -348,7 +340,7 @@ class NeRFRenderer(nn.Module):
         # rays_o, rays_d: [B, N, 3], assumes B == 1
         # bg_color: [BN, 3] in range [0, 1]
         # return: image: [B, N, 3], depth: [B, N]
-        prefix = rays_o.shape[:-1]
+        set_trace()        prefix = rays_o.shape[:-1]
         rays_o = rays_o.contiguous().view(-1, 3)
         rays_d = rays_d.contiguous().view(-1, 3)
 
@@ -392,7 +384,8 @@ class NeRFRenderer(nn.Module):
         # query SDF and RGB
         density_outputs = self.density(xyzs.reshape(-1, 3))
 
-        density_outputs_teacher = self.teacher_models[self.scene_id //self.opt.teacher_size].module.density(xyzs.reshape(-1,3))
+        density_outputs_teacher = self.teacher_models[self.scene_id].module.density(xyzs.reshape(-1,3))
+        set_trace()
 
         #sigmas = density_outputs['sigma'].view(N, num_steps) # [N, T]
         for k, v in density_outputs.items():
@@ -502,7 +495,6 @@ class NeRFRenderer(nn.Module):
         N = rays_o.shape[0] # N = B * N, in fact
         device = rays_o.device
 
-
         # pre-calculate near far
         nears, fars = raymarching.near_far_from_aabb(rays_o, rays_d, self.aabb_train if self.training else self.aabb_infer)
 
@@ -516,14 +508,13 @@ class NeRFRenderer(nn.Module):
 
         if self.training:
             # setup counter
-            counter = self.step_counter[self.scene_id][int((self.local_step[self.scene_id] % 16).item())]
-            #counter = self.step_counter[self.scene_id][(self.local_step[self.scene_id] % 16).item()]
+            counter = self.step_counter[self.local_step % 16]
             counter.zero_() # set to 0
             self.local_step += 1
             if not self.teacher_flag:
                 current_density_bitfield = self.density_bitfield[self.scene_id]
 
-            xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.bound, current_density_bitfield, self.cascade, self.grid_size, nears, fars, counter, self.mean_count[self.scene_id], perturb, 128, force_all_rays, dt_gamma, max_steps)
+            xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.bound, current_density_bitfield, self.cascade, self.grid_size, nears, fars, counter, self.mean_count, perturb, 128, force_all_rays, dt_gamma, max_steps)
  
             
 
@@ -535,7 +526,7 @@ class NeRFRenderer(nn.Module):
 
             if self.opt.dist_sigma_rgb_loss or self.opt.dist_image_loss or self.opt.dist_depth_loss:
 
-                sigmas_teacher, rbgs_teacher, normals_teacher = self.teacher_models[self.scene_id//self.opt.teacher_size](xyzs, dirs, light_d, ratio=ambient_ratio, shading=shading)
+                sigmas_teacher, rbgs_teacher, normals_teacher = self.teacher_models[self.scene_id](xyzs, dirs, light_d, ratio=ambient_ratio, shading=shading)
             #replicas = nn.parallel.replicate(self,[0,1])
             #inputs = nn.parallel.scatter() 
             #print(f'valid RGB query ratio: {mask.sum().item() / mask.shape[0]} (total = {mask.sum().item()})')
@@ -580,7 +571,6 @@ class NeRFRenderer(nn.Module):
 
                 if not self.teacher_flag:
                     current_density_bitfield = self.density_bitfield[self.scene_id]
-
     
 
                 xyzs, dirs, deltas = raymarching.march_rays(n_alive, n_step, rays_alive, rays_t, rays_o, rays_d, self.bound, current_density_bitfield, self.cascade, self.grid_size, nears, fars, 128, perturb if step == 0 else False, dt_gamma, max_steps)
@@ -600,10 +590,9 @@ class NeRFRenderer(nn.Module):
             
             # use the bg model to calculate bg_color
             # sph = raymarching.sph_from_ray(rays_o, rays_d, self.bg_radius) # [N, 2] in [-1, 1]
-            
             bg_color = self.background(rays_d) # [N, 3]
             if self.opt.dist_image_loss and self.training:
-                bg_color_teacher = self.teacher_models[self.scene_id // self.opt.teacher_size].module.background(rays_d)
+                bg_color_teacher = self.teacher_models[self.scene_id].module.background(rays_d)
                 image_teacher = image_teacher + (1 - weights_sum_teacher).unsqueeze(-1) * bg_color_teacher
                 image_teacher = image_teacher.view(*prefix,3)
 
@@ -644,15 +633,17 @@ class NeRFRenderer(nn.Module):
         # call before each epoch to update extra states.
         if not self.cuda_ray:
             return 
+        
         ### update density grid
         if not self.teacher_flag:
             current_density_grid = self.density_grid[scene_id] 
-        tmp_grid = - torch.ones(current_density_grid.shape).cuda()
+        print(current_density_grid.shape)
+        tmp_grid = - torch.ones((1,2097152))
        
          
-        X = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield[scene_id].device).split(S)
-        Y = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield[scene_id].device).split(S)
-        Z = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield[scene_id].device).split(S)
+        X = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
+        Y = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
+        Z = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
 
         for xs in X:
             for ys in Y:
@@ -673,11 +664,12 @@ class NeRFRenderer(nn.Module):
                         # add noise in [-hgs, hgs]
                         cas_xyzs += (torch.rand_like(cas_xyzs) * 2 - 1) * half_grid_size
                         # query density
-                        sigmas = self.density(cas_xyzs.cuda())['sigma'].reshape(-1).detach()
+                        sigmas = self.density(cas_xyzs)['sigma'].reshape(-1).detach()
                         # assign 
-                        tmp_grid[cas, indices] = sigmas
+                        tmp_grid[cas, indices] = sigmas.cpu()
         
         # ema update
+        set_trace()
         if not self.teacher_flag:
             current_density_grid = self.density_grid[scene_id]        
         valid_mask =current_density_grid >= 0
@@ -688,13 +680,13 @@ class NeRFRenderer(nn.Module):
 
         # convert to bitfield
         density_thresh = min(self.mean_density[scene_id], self.density_thresh)
-        self.density_bitfield[scene_id] = raymarching.packbits(self.density_grid[scene_id], density_thresh, self.density_bitfield[scene_id])
+        self.density_bitfield = raymarching.packbits(self.density_grid, density_thresh, self.density_bitfield[scene_id])
 
         ### update step counter
-        total_step = min(16, self.local_step[scene_id])
+        total_step = min(16, self.local_step)
         if total_step > 0:
-            self.mean_count[scene_id] = int(self.step_counter[scene_id,:total_step, 0].sum().item() / total_step)
-        self.local_step[scene_id] = 0
+            self.mean_count = int(self.step_counter[scene_id,:total_step, 0].sum().item() / total_step)
+        self.local_step = 0
 
         # print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > density_thresh).sum() / (128**3 * self.cascade):.3f} | [step counter] mean={self.mean_count}')
 
