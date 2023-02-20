@@ -61,7 +61,6 @@ class MLP(nn.Module):
         net = []
 
 
-
         if self.hyper_flag:
             print('invoking hyper trans')
             self.transformer_encoder = TransformerEncoder(256, 6,12,16,64, condition_trans = opt.condition_trans)
@@ -75,7 +74,7 @@ class MLP(nn.Module):
             if self.opt.conditioning_mode == 'sum' or self.opt.conditioning_dim ==0:
                 transform_dim = self.dim_hidden
             else:
-                transform_dim = opt.conditioning_dim 
+                transform_dim = opt.conditioning_dim
 
             if opt.multiple_conditioning_transformers:
                 self.transform_list = nn.ModuleList()
@@ -84,7 +83,7 @@ class MLP(nn.Module):
                         self.transform_list.append(nn.Sequential(wn(nn.Linear(512, self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim))))
                         self.apply_init(model = self.transform_list[i], init='ortho')
                     elif self.opt.conditioning_model  == 'bert':
-                        self.transform_list.append(nn.Sequential(wn(nn.Linear(768, self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))) 
+                        self.transform_list.append(nn.Sequential(wn(nn.Linear(768, self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim))))
                         self.apply_init(model = self.transform_list[i], init='ortho')
 
 
@@ -95,7 +94,7 @@ class MLP(nn.Module):
                     self.transform = nn.Linear(768 + 256,transform_dim)
                 else:
                     self.transform = nn.Linear(512+256,transform_dim)
-                nn.init.orthogonal_(self.transform.weight) 
+                nn.init.orthogonal_(self.transform.weight)
                 #self.apply_init(model = self.transform, init='ortho')
                 self.layer_id_encoder = PositionalEncoding(d_model = 256, max_len = num_layers)
                 self.layer_index = self.layer_id_encoder().cuda()
@@ -105,22 +104,22 @@ class MLP(nn.Module):
 
         for l in range(num_layers):
             #if self.nerf_conditioning:
-            inp_dim_aug_dim = 0 
-            #net.append(nn.Linear(self.dim_in  if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias)) 
+            inp_dim_aug_dim = 0
+            #net.append(nn.Linear(self.dim_in  if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden, bias=bias))
             if True : #self.nerf_conditioning:
-                if opt is not None and opt.bottleneck and num_layers >=5: 
+                if opt is not None and opt.bottleneck and num_layers >=5:
                     if l ==0:
                         if opt.WN is None or 'not_first' in opt.WN :
                             net.append(nn.Linear(self.dim_in, self.dim_hidden))
                         else:
                             net.append(wn(nn.Linear(self.dim_in, self.dim_hidden)) )
-                            
+
                     elif l == num_layers - 3:
                         net.append(nn.Linear(self.dim_hidden, self.dim_hidden//2))
                     elif l == num_layers - 2:
-                        net.append(nn.Linear(self.dim_hidden//2, self.dim_hidden//4)) 
+                        net.append(nn.Linear(self.dim_hidden//2, self.dim_hidden//4))
                     elif l == num_layers - 1:
-                        if opt.WN is None or 'not_last' in opt.WN : 
+                        if opt.WN is None or 'not_last' in opt.WN :
                             net.append(nn.Linear(self.dim_hidden//4,4))
                         else:
                             net.append(wn(nn.Linear(self.dim_hidden//4,4)))
@@ -133,32 +132,32 @@ class MLP(nn.Module):
                     if opt is not None and  opt.WN is not None:
                         if l==0 and 'not_first' in opt.WN:
                             net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias))
-                        elif l == num_layers -1 and 'not_last' in opt.WN : 
-                            net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)) 
+                        elif l == num_layers -1 and 'not_last' in opt.WN :
+                            net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias))
                         else:
                             if opt.pos_enc_ins == 0:
                                 opt.pos_enc_ins = num_layers +1
                             inp_dim_aug_dim = 0
                             if l % opt.pos_enc_ins  ==0 and l!=0:
-                                 
+
                                 inp_dim_aug_dim = inp_dim_aug_dim + 32
                                 #net.append(wn(nn.Linear(self.dim_in  if l == 0 else self.dim_hidden+32, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)))
-                            
+
                             if self.nerf_conditioning:
 
                                 #if l ==0:
                                 #    inp_dim_aug_dim =  0#transform_dim
                                 if self.opt.conditioning_mode == 'cat' and (l==0 or l ==1 or l ==2 or l==3 or l==4):
                                     inp_dim_aug_dim = inp_dim_aug_dim + transform_dim
-                                
+
 
                             net.append(wn(nn.Linear(self.dim_in + inp_dim_aug_dim if l == 0 else self.dim_hidden + inp_dim_aug_dim, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)))
                     else:
                         net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias))
             else:
-                net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias)) 
+                net.append(nn.Linear(self.dim_in if l == 0 else self.dim_hidden, self.dim_out if l == num_layers - 1 else self.dim_hidden,bias=bias))
 
-            
+
 
             if opt is not None and 'LN' in opt.normalization:
                 self.layer_norm_list.append(nn.LayerNorm(self.dim_hidden, elementwise_affine = True))
@@ -171,7 +170,7 @@ class MLP(nn.Module):
             param_shapes= {}
             for idx, layer in enumerate(net):
                 param_shapes['layer_{}'.format(idx)] = layer.weight.shape
-           
+
             if 'dynamic' in self.opt.arch :
                 self.hyper_transformer = DyTransInr(param_shapes.items(), self.dim_hidden, self.transformer_encoder)
             else:
@@ -270,19 +269,19 @@ class MLP(nn.Module):
                 if ind <self.num_layers -1:
                     nn.init.orthogonal_(layer_.weight)
                     if self.opt.WN :
-                        if not ('not_first' in self.opt.WN and ind ==0): 
-                            layer_.weight_g.data.fill_(1.0) 
+                        if not ('not_first' in self.opt.WN and ind ==0):
+                            layer_.weight_g.data.fill_(1.0)
             elif init == 'extend_eye':
                 if ind >=3 and ind < self.num_layers -1:
                     nn.init.eye_(layer_.weight)
-                    if self.opt.WN: 
-                        layer_.weight_g.data.fill_(1.0) 
+                    if self.opt.WN:
+                        layer_.weight_g.data.fill_(1.0)
             elif init == 'eye':
                 if ind < self.num_layers -1:
                     nn.init.eye_(layer_.weight)
-                    if self.opt.WN: 
+                    if self.opt.WN:
                         if not ('not_first' in self.opt.WN and ind ==0):
-                            layer_.weight_g.data.fill_(1.0) 
+                            layer_.weight_g.data.fill_(1.0)
             else:
                 print('maintain default')
             #print('checking')
@@ -290,15 +289,15 @@ class MLP(nn.Module):
     def adaptive_norm(self,x,condition_vec):
         style_mean = condition_vec.mean()
         style_std  = condition_vec.std()
-        
+
         content_mean = x.mean(dim=-1)
         content_std  = x.std(dim=-1)
-        
+
         normalized_feat = (x - content_mean.unsqueeze(-1))/content_std.unsqueeze(-1)
         out = (normalized_feat * style_std) +  style_mean
         return out
-        
-    def forward(self, x, conditioning_vector = None,epoch = None):
+
+    def forward(self, x, conditioning_vector = None, condvec_interp = None, interp=0, epoch=None):
         #print(x.device)i
         x = x/x.norm(dim=1).unsqueeze(dim=1) #* 10
         pos_enc = x
@@ -314,19 +313,24 @@ class MLP(nn.Module):
                 if 'dynamic' not in self.opt.arch:
                     params = self.hyper_transformer(processed_tokens)
                 else:
-                    processed_scene_vec = self.hyper_transformer.get_scene_vec(processed_tokens) 
-         
+                    processed_scene_vec = self.hyper_transformer.get_scene_vec(processed_tokens)
+
+                    if condvec_interp and interp != 1:
+                        interp_tokens = self.hyper_transform(condvec_interp[scene_id]['input_tokens'].squeeze(0))
+                        interp_scene_vec = self.hyper_transformer.get_scene_vec(interp_tokens)
+                        processed_scene_vec = interp * processed_scene_vec + (1-interp) * interp_scene_vec
+
             #self.set_params(params)
         hyper_inp = None
         for l in range(self.num_layers):
-            # skip options                
+            # skip options
             #if l % 2 ==1 and l>1 and self.opt is not None and self.opt.skip:
-            #    x = x + x_skip 
+            #    x = x + x_skip
 
             #Pre-Normalization
             if self.opt is not None and  l !=0 and self.opt.normalization == "pre_LN":
                 x = self.layer_norm_list[l](x)
-            
+
             if self.opt is not None and self.opt.normalization == "pre_ada" and self.nerf_conditioning:
                 x = self.adaptive_norm(x,conditioning_vector[scene_id]['input_vec'])
             # conditioning options
@@ -346,21 +350,22 @@ class MLP(nn.Module):
                     #    print(cond_vec_with_pos_enc)
                         #set_trace()
                     proj_cond_vec = self.transform(cond_vec_with_pos_enc)
-                    
+
                 proj_cond_vec = torch.nn.functional.layer_norm(proj_cond_vec, (proj_cond_vec.shape[1],))
                 proj_cond_vec = proj_cond_vec /proj_cond_vec.norm().detach()
                 if  l==0 or self.opt.conditioning_mode == 'cat'  :
                     x = torch.cat((x,proj_cond_vec.repeat(x.shape[0],1)), dim=1)
                 else:
-                    
+
                     x = x +  proj_cond_vec.repeat(x.shape[0],1)    #self.transform(conditioning_vector['input_vec']).repeat(x.shape[0],1)
-                    
+
             if self.opt is not None and l%self.opt.pos_enc_ins ==0 and l!=0:
                 x = torch.cat((x,pos_enc), dim=1)
             # forward pass
             if self.hyper_flag:
                 if 'dynamic' in self.opt.arch:
                     params = self.hyper_transformer.get_params(processed_scene_vec, l, hyper_inp)
+
                     x = F.linear(x,params['layer_{}'.format(l)])#batched_linear_mm(x, params['layer_{}'.format(l)])i
                     if 'detach'  in self.opt.arch:
                         hyper_inp = x.detach()
@@ -372,12 +377,12 @@ class MLP(nn.Module):
                 x = self.net[l](x)
 
             #Post Normalization
-            if self.opt is not None and l != self.num_layers - 1 and self.opt.normalization == "post_ada" and self.nerf_conditioning:  
+            if self.opt is not None and l != self.num_layers - 1 and self.opt.normalization == "post_ada" and self.nerf_conditioning:
                 x = self.adaptive_norm(x,conditioning_vector[scene_id]['input_vec'])
 
             if self.opt is not None and l != self.num_layers - 1 and self.opt.normalization == "post_LN":
-               
-                x = self.layer_norm_list[l](x) 
+
+                x = self.layer_norm_list[l](x)
             # skip options
             if l % 2 ==0 and l>1 and self.opt is not None and self.opt.skip and l != self.num_layers-1:
                 x = x + x_skip
@@ -385,15 +390,15 @@ class MLP(nn.Module):
             # Activation
             if l != self.num_layers - 1:
                 x = F.relu(x, inplace=True)
-            
-            # store for skip 
+
+            # store for skip
             if l %2 == 0:
                 x_skip = x
         return x
 
 
 class HyperTransNeRFNetwork(NeRFRenderer):
-    def __init__(self, 
+    def __init__(self,
                  opt,
                  num_layers=3,
                  hidden_dim=64,
@@ -402,7 +407,6 @@ class HyperTransNeRFNetwork(NeRFRenderer):
                  wandb_obj = None,
                  teacher_flag = False
                  ):
-        
         super().__init__(opt, teacher_flag)
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
@@ -415,15 +419,15 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             self.nerf_conditioning = True
         elif opt.conditioning_model == 'bert':
             from transformers import AutoTokenizer, AutoModel
-            self.text_model_tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/bert-base-nli-mean-tokens', cache_dir = "./local_dir")
-            self.text_model = AutoModel.from_pretrained('sentence-transformers/bert-base-nli-mean-tokens',cache_dir = "./local_dir").cuda()
+            self.text_model_tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-mpnet-base-v2", cache_dir = "./local_dir")
+            self.text_model = AutoModel.from_pretrained("sentence-transformers/all-mpnet-base-v2", cache_dir = "./local_dir").cuda()
             for parameters in list(self.text_model.parameters()):
                 parameters.requires_grad = False
 
             if self.opt.fine_tune_conditioner:
                 for parameters in list(self.text_model.parameters())[-34:-2]:
                     parameters.requires_grad = True
-                    
+
             self.nerf_conditioning = True
 
         elif opt.conditioning_model == 'T5':
@@ -444,17 +448,23 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             for parameters in self.text_model.parameters():
                 parameters.requires_grad = True
             self.nerf_conditioning = True
- 
+
         elif opt.conditioning_model is None:
-            self.nerf_conditioning = False 
+            self.nerf_conditioning = False
 
         if self.nerf_conditioning:
             #with torch.no_grad():
-                
             self.conditioning_vector = {}
+            self.conditioning_interp = {}
             for idx, val in enumerate(self.opt.text):
-               current_emb  = self.get_conditioning_vec(idx)
-               self.conditioning_vector[idx] = current_emb
+                current_emb  = self.get_conditioning_vec(idx)
+                self.conditioning_vector[idx] = current_emb
+
+                # Interpolation vector
+                if self.opt.interp and self.opt.interptext is not None:
+                    current_emb  = self.get_conditioning_vec(idx, True)
+                    self.conditioning_interp[idx] = current_emb
+
             #del self.text_model_tokenizer
             #self.text_model_tokenizer = None
             #gc.collect()
@@ -469,19 +479,17 @@ class HyperTransNeRFNetwork(NeRFRenderer):
         #self.sigma_net = MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True)
         # background network
         if self.bg_radius > 0:
-            self.num_layers_bg = num_layers_bg   
+            self.num_layers_bg = num_layers_bg
             self.hidden_dim_bg = hidden_dim_bg
-            
+
             # use a very simple network to avoid it learning the prompt...
             # self.encoder_bg, self.in_dim_bg = get_encoder('tiledgrid', input_dim=2, num_levels=4, desired_resolution=2048)
             self.encoder_bg, self.in_dim_bg = get_encoder('frequency', input_dim=3)
 
             self.bg_net = MLP(self.in_dim_bg, 3, hidden_dim_bg, num_layers_bg, bias=True)
-            
+
         else:
             self.bg_net = None
-
-
 
     def load_checkpoint(self, checkpoint=None, model_only=True):
 
@@ -525,9 +533,12 @@ class HyperTransNeRFNetwork(NeRFRenderer):
 
     def get_conditioning_vec(self,index=0):
         conditioning_vector = None
- 
+
         if self.conditioning_model == 'CLIP':
-            ref_text = self.opt.text[index]
+            if interp:
+                ref_text = self.opt.interptext[index]
+            else:
+                ref_text = self.opt.text[index]
             conditioning_vector = {}
             #if self.opt.dir_text:
             #    print('not implemented')
@@ -539,7 +550,10 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             conditioning_vector['input_tokens'] = conditioning_tokens
 
         elif self.conditioning_model == 'T5':
-            ref_text = self.opt.text[index]
+            if interp:
+                ref_text = self.opt.interptext[index]
+            else:
+                ref_text = self.opt.text[index]
             conditioning_vector = {}
             #if self.opt.dir_text:
             #    print('not implemented')
@@ -555,39 +569,46 @@ class HyperTransNeRFNetwork(NeRFRenderer):
                     conditioning_tokens = self.text_model(text_token, decoder_input_ids = decoder_input_ids)['encoder_last_hidden_state']
             conditioning_vector['input_vec'] = conditioning_tokens.mean(dim=1)/conditioning_tokens.mean(dim=1).norm(dim=-1, keepdim=True)
             conditioning_vector['input_tokens'] = conditioning_tokens/conditioning_tokens.norm(dim=-1, keepdim = True )
-        
+
         elif self.conditioning_model == 'bert':
-            
+
             def mean_pooling(model_output, attention_mask):
                 token_embeddings = model_output[0] #First element of model_output contains all token embeddings
                 input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
                 return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
-            ref_text = self.opt.text[index]
+            if interp:
+                ref_text = self.opt.interptext[index]
+            else:
+                ref_text = self.opt.text[index]
             if self.opt.phrasing:
+                import re
                 hyper_net_phrase = []
-                for word in ref_text.split(' '):
-                    for  key_word in  ['chair','refrigerator,','table', 'couch','toaster', 'plaid', 'iron', 'stained glass', 'origami', 'wood', 'gold', 'blender', 'pumpkin', 'orange', 'green', 'blue', 'red', 'yellow'] :
-                        if key_word in word:
-                            hyper_net_phrase.append(' '+word)
-                        if  word in ['orange', 'green', 'blue', 'red', 'yellow']:
-                            color_net_phrase.append(' '+word)
-                        if  word in ['chair', 'table']:
-                            shape_net_phrase.append(' '+word)                        
-
-                
-                hyper_net_phrase = ' '.join(hyper_net_phrase) * 10
-                color_net_phrase = ' '.join(color_net_phrase) * 10
-                shape_net_phrase = ' '.join(shape_net_phrase) * 10
+                color_net_phrase = []
+                shape_net_phrase = []
+                colors = ['orange', 'green', 'blue', 'red', 'yellow', 'pink', 'gray', 'purple', 'black', 'brown',
+                          'teal', 'lavender', 'beige', 'maroon', 'chartreuse', 'violet', 'magenta', 'cyan',
+                          'aquamarine', 'turqoise', 'tan']
+                objs = ['chair', 'table']
+                tmp_text = re.sub(r'[^\w\s]', '', ref_text)
+                for word in tmp_text.split():
+                    if word in colors + objs:
+                        hyper_net_phrase.append(word)
+                    if  word in colors:
+                        color_net_phrase.append(' '+word)
+                    if  word in objs:
+                        shape_net_phrase.append(' '+word)
+                hyper_net_phrase = ' '.join(hyper_net_phrase * 10)
+                color_net_phrase = ' '.join(color_net_phrase * 10)
+                shape_net_phrase = ' '.join(shape_net_phrase * 10)
                 #print(hyper_net_phrase)
                 ref_text = hyper_net_phrase
-                print(ref_text)
-                #set_trace()
-            conditioning_vector = {}     
-             
+                if self.opt.debug:
+                    print(ref_text)
+            conditioning_vector = {}
             text_token = self.text_model_tokenizer(ref_text, padding=True, truncation=True, return_tensors='pt')
             text_token['input_ids'] = text_token['input_ids'].cuda()
-            text_token['token_type_ids'] = text_token['token_type_ids'].cuda()
+            # text_token['token_type_ids'] = text_token['token_type_ids'].cuda()
             text_token['attention_mask'] = text_token['attention_mask'].cuda()
             if self.opt.fine_tune_conditioner:
                 model_output = self.text_model(**text_token)
@@ -595,12 +616,13 @@ class HyperTransNeRFNetwork(NeRFRenderer):
                 with torch.no_grad():
                     model_output = self.text_model(**text_token)
             conditioning_tokens = model_output[0]
-            
-            inp_vec = mean_pooling(model_output, text_token['attention_mask'])
-            conditioning_vector['input_vec']  = inp_vec/inp_vec.norm(dim=-1, keepdim=True)
-            conditioning_vector['input_tokens'] = conditioning_tokens/conditioning_tokens.norm(dim=-1, keepdim = True )           
 
-        return conditioning_vector    
+            inp_vec = mean_pooling(model_output, text_token['attention_mask'])
+            conditioning_vector['text_tokens'] = text_token
+            conditioning_vector['input_vec']  = inp_vec/inp_vec.norm(dim=-1, keepdim=True)
+            conditioning_vector['input_tokens'] = conditioning_tokens/conditioning_tokens.norm(dim=-1, keepdim = True )
+
+        return conditioning_vector
 
     '''
     def __getattr__(self,name):
@@ -612,40 +634,158 @@ class HyperTransNeRFNetwork(NeRFRenderer):
     # add a density blob to the scene center
     def gaussian(self, x):
         # x: [B, N, 3]
-        
+
         d = (x ** 2).sum(-1)
         g = 5 * torch.exp(-d / (2 * 0.2 ** 2))
 
         return g
-       
+
 
     def common_forward(self, x):
         # x: [N, 3], in [-bound, bound]
-
         # sigma
         if self.opt.mem:
             torch.cuda.empty_cache()
-            gc.collect() 
+            gc.collect()
         h = self.encoder(x, bound=self.bound)
 
-        #cur_mem = torch.cuda.memory_allocated() * 1e-9 
-        #max_mem = torch.cuda.max_memory_allocated() * 1e-9 
+        #cur_mem = torch.cuda.memory_allocated() * 1e-9
+        #max_mem = torch.cuda.max_memory_allocated() * 1e-9
         #print(cur_mem/max_mem)
         #print(h.shape)
         #if self.sigma_net.epoch == 11:
-        self.sigma_net.module.scene_id = self.scene_id 
+        # TODO: Need to have secondary scene id for interpolation vector
+        self.sigma_net.module.scene_id = self.scene_id
         temp = self.get_conditioning_vec(index = self.scene_id)
- 
-        self.conditioning_vector[self.scene_id]  = temp
-        h = self.sigma_net(h, conditioning_vector = self.conditioning_vector, epoch = self.sigma_net.epoch)
+        self.conditioning_vector[self.scene_id] = temp
+
+        # Interpolate conditioning vector if interpolating bert tokens
+        if self.opt.interp == "bert" and self.interpval != 1:
+            # TODO: Interpolate only the object/color token depending on the setting
+            temp = self.get_conditioning_vec(index = self.scene_id, interp=True)
+            # if self.opt.debug:
+            #     text = self.opt.text[self.scene_id]
+            #     styleidx = self.opt.textstyleidx[self.scene_id]
+            #     objidx = self.opt.objstyleidx[self.scene_id]
+            #     style = text[styleidx[0]:styleidx[1]]
+            #     obj = text[objidx[0]:objidx[1]]
+
+            #     interptext = self.opt.interptext[self.scene_id]
+            #     interpstyleidx = self.opt.interpstyleidx[self.scene_id]
+            #     interpobjidx = self.opt.interpobjidx[self.scene_id]
+            #     interpstyle = interptext[interpstyleidx[0]:interpstyleidx[1]]
+            #     interpobj = interptext[interpobjidx[0]:interpobjidx[1]]
+            #     print(f"\nID: {self.scene_id}. Style: {style}, Object: {obj}, Interp style: {interpstyle}, interp obj: {interpobj}")
+
+            if self.opt.phrasing:
+                self.conditioning_vector[self.scene_id]['input_tokens'] = self.interpval * self.conditioning_vector[self.scene_id]['input_tokens'] + (1 - self.interpval) * temp['input_tokens']
+            else:
+                # Find the indices of the tokens which correspond to color/obj respectively
+                # TODO: if pooling then need to train on poolstyle
+                if self.opt.textstyleidx and self.opt.interpstyleidx and not self.opt.interponlyobj:
+                    textstyleidx = self.opt.textstyleidx[self.scene_id]
+                    interpstyleidx = self.opt.interpstyleidx[self.scene_id]
+
+                    # Find mapping from tokens back to words to do interpolation
+                    tstart = tend = 0
+                    curtoken = self.conditioning_vector[self.scene_id]['text_tokens']
+                    for i in range(1, len(curtoken['input_ids'][0])):
+                        tmpchars = curtoken.token_to_chars(i)
+                        if tmpchars[0] == textstyleidx[0]:
+                            tstart = i-1
+                        if tmpchars[1] == textstyleidx[1]:
+                            tend = i
+                            break
+
+                        # if self.opt.debug:
+                        #     print(f"Current text token char mapping: {self.opt.text[self.scene_id][tmpchars[0]:tmpchars[1]]}")
+
+                    if tstart == tend == 0:
+                        raise ValueError(f"Couldn't find tokens corresponding to text style {self.opt.text[self.scene_id][textstyleidx[0]:textstyleidx[1]]}")
+
+                    interptstart = interptend = 0
+                    for i in range(1, len(temp['text_tokens']['input_ids'][0])):
+                        tmpchars = temp['text_tokens'].token_to_chars(i)
+                        if tmpchars[0] == interpstyleidx[0]:
+                            interptstart = i-1
+                        if tmpchars[1] == interpstyleidx[1]:
+                            interptend = i
+                            break
+
+                        # if self.opt.debug:
+                        #     print(f"Current interp text token char mapping: {self.opt.interptext[self.scene_id][tmpchars[0]:tmpchars[1]]}")
+
+                    if interptstart == interptend == 0:
+                        raise ValueError(f"Couldn't find tokens corresponding to interp text style {self.opt.interptext[self.scene_id][interpstyleidx[0]:interpstyleidx[1]]}")
+
+                    if self.opt.poolstyle:
+                        stylepool = torch.mean(self.conditioning_vector[self.scene_id]['input_tokens'][tstart:tend], dim=0)
+                        interpool = torch.mean(temp['input_tokens'][interptstart:interptend], dim=0)
+                        self.conditioning_vector[self.scene_id]['input_tokens'][tstart:tend] = self.interpval * stylepool + (1 - self.interpval) * interpool
+                    else:
+                        # NOTE: currently assume we're only batching one pair of interp prompts at a time!!!
+                        assert tend - tstart == interptend - interptstart, f"Different token lengths found for style interpolation! Original ({self.opt.text[self.scene_id][textstyleidx[0]:textstyleidx[1]]}): {tstart}:{tend}. Interp ({self.opt.interptext[self.scene_id][interpstyleidx[0]:interpstyleidx[1]]}): {interptstart}:{interptend}"
+                        self.conditioning_vector[self.scene_id]['input_tokens'][:,tstart:tend] = self.interpval * self.conditioning_vector[self.scene_id]['input_tokens'][:,tstart:tend] + (1 - self.interpval) * temp['input_tokens'][:,interptstart:interptend]
+
+                if self.opt.objstyleidx and self.opt.interpobjidx and not self.opt.interponlystyle:
+                    objstyleidx = self.opt.objstyleidx[self.scene_id]
+                    interpobjidx = self.opt.interpobjidx[self.scene_id]
+
+                    # Find mapping from tokens back to words to do interpolation
+                    tstart = tend = 0
+                    curtoken = self.conditioning_vector[self.scene_id]['text_tokens']
+                    for i in range(1, len(curtoken['input_ids'][0])):
+                        tmpchars = curtoken.token_to_chars(i)
+                        if tmpchars[0] == objstyleidx[0]:
+                            tstart = i-1
+                        if tmpchars[1] == objstyleidx[1]:
+                            tend = i
+                            break
+                        # if self.opt.debug:
+                        #     print(f"Current obj text token char mapping: {self.opt.text[self.scene_id][tmpchars[0]:tmpchars[1]]}")
+
+                    if tstart == tend == 0:
+                        raise ValueError(f"Couldn't find tokens corresponding to text obj {self.opt.text[self.scene_id][objstyleidx[0]:objstyleidx[1]]}")
+
+                    interptstart = interptend = 0
+                    for i in range(1, len(temp['text_tokens']['input_ids'][0])):
+                        tmpchars = temp['text_tokens'].token_to_chars(i)
+                        if tmpchars[0] == interpobjidx[0]:
+                            interptstart = i-1
+                        if tmpchars[1] == interpobjidx[1]:
+                            interptend = i
+                            break
+                        # if self.opt.debug:
+                        #     print(f"Current obj interptext token char mapping: {self.opt.interptext[self.scene_id][tmpchars[0]:tmpchars[1]]}")
+
+                    if interptstart == interptend == 0:
+                        raise ValueError(f"Couldn't find tokens corresponding to interp text style {self.opt.interptext[self.scene_id][interpobjidx[0]:interpobjidx[1]]}")
+
+                    if self.opt.poolstyle:
+                        stylepool = torch.mean(self.conditioning_vector[self.scene_id]['input_tokens'][tstart:tend], dim=0)
+                        interpool = torch.mean(temp['input_tokens'][interptstart:interptend], dim=0)
+                        self.conditioning_vector[self.scene_id]['input_tokens'][tstart:tend] = self.interpval * stylepool + (1 - self.interpval) * interpool
+                    else:
+                        # NOTE: currently assume we're only batching one pair of interp prompts at a time!!!
+                        assert tend - tstart == interptend - interptstart, f"Different token lengths found for obj interpolation! Original ({self.opt.text[self.scene_id][objstyleidx[0]:objstyleidx[1]]}): {tstart}:{tend}. Interp ({self.opt.interptext[self.scene_id][interpobjidx[0]:interpobjidx[1]]}): {interptstart}:{interptend}"
+                        self.conditioning_vector[self.scene_id]['input_tokens'][:, tstart:tend] = self.interpval * self.conditioning_vector[self.scene_id]['input_tokens'][:,tstart:tend] + (1 - self.interpval) * temp['input_tokens'][:,interptstart:interptend]
+
+        # Otherwise interpolate dynamic hypernet intermediate representation
+        elif self.opt.interp == "hyper" and self.interpval:
+            temp = self.get_conditioning_vec(index = self.scene_id, interp=True)
+            self.conditioning_interp[self.scene_id] = temp
+
+        h = self.sigma_net(h, conditioning_vector = self.conditioning_vector, epoch = self.sigma_net.epoch,
+                           condvec_interp=self.conditioning_interp if self.opt.interp=="hyper" else None,
+                           interp=self.interpval if self.opt.interp=="hyper" else None)
 
         sigma = trunc_exp(h[..., 0] + self.gaussian(x))
         albedo = torch.sigmoid(h[..., 1:])
         if self.opt.mem:
             torch.cuda.empty_cache()
-            gc.collect() 
+            gc.collect()
         return sigma, albedo
-    
+
     # ref: https://github.com/zhaofuq/Instant-NSR/blob/main/nerf/network_sdf.py#L192
     def finite_difference_normal(self, x, epsilon=1e-2):
         # x: [N, 3]
@@ -655,25 +795,26 @@ class HyperTransNeRFNetwork(NeRFRenderer):
         dy_neg, _ = self.common_forward((x + torch.tensor([[0.00, -epsilon, 0.00]], device=x.device)).clamp(-self.bound, self.bound))
         dz_pos, _ = self.common_forward((x + torch.tensor([[0.00, 0.00, epsilon]], device=x.device)).clamp(-self.bound, self.bound))
         dz_neg, _ = self.common_forward((x + torch.tensor([[0.00, 0.00, -epsilon]], device=x.device)).clamp(-self.bound, self.bound))
-        
+
         normal = torch.stack([
-            0.5 * (dx_pos - dx_neg) / epsilon, 
-            0.5 * (dy_pos - dy_neg) / epsilon, 
+            0.5 * (dx_pos - dx_neg) / epsilon,
+            0.5 * (dy_pos - dy_neg) / epsilon,
             0.5 * (dz_pos - dz_neg) / epsilon
         ], dim=-1)
 
         return normal
-    
+
     def forward(self, x, d, l=None, ratio=1, shading='albedo'):
         # x: [N, 3], in [-bound, bound]
         # d: [N, 3], view direction, nomalized in [-1, 1]
         # l: [3], plane light direction, nomalized in [-1, 1]
         # ratio: scalar, ambient ratio, 1 == no shading (albedo only), 0 == only shading (textureless)
+
         if shading == 'albedo':
             # no need to query normal
             sigma, color = self.common_forward(x)
             normal = None
-        
+
         else:
             # query normal
             sigma, albedo = self.common_forward(x)
@@ -698,15 +839,14 @@ class HyperTransNeRFNetwork(NeRFRenderer):
                 color = (normal + 1) / 2
             else: # 'lambertian'
                 color = albedo * lambertian.unsqueeze(-1)
-        
         return sigma, color, normal
 
-      
+
     def density(self, x):
         # x: [N, 3], in [-bound, bound]
-        
+
         sigma, albedo = self.common_forward(x)
-        
+
         return {
             'sigma': sigma,
             'albedo': albedo,
@@ -715,7 +855,7 @@ class HyperTransNeRFNetwork(NeRFRenderer):
 
     def background(self, d):
         h = self.encoder_bg(d) # [N, C]
-        
+
         h = self.bg_net(h)
 
         # sigmoid activation for rgb
@@ -729,7 +869,7 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             {'params': self.encoder.parameters(), 'lr': lr * 10},
             {'params': self.sigma_net.parameters(), 'lr': lr},
             {'params': list(self.text_model.parameters())[-34: -2], 'lr': lr }
-        ]        
+        ]
 
         if self.bg_radius > 0:
             params.append({'params': self.encoder_bg.parameters(), 'lr': lr * 10})

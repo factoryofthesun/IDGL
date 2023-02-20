@@ -40,7 +40,7 @@ class DyTransInr(nn.Module):
         self.hypo_meta_data = [ item  for item in list(self.hyponet_param_shapes)]
         act_shapes = [ item[1][0]  for item in list(self.hyponet_param_shapes)]
         act_shapes.insert(0,0)
-        
+
         for idx, (name, shape) in enumerate(self.hyponet_param_shapes):
             self.base_params[name] = nn.Parameter(init_wb(shape))
             g = min(shape[1], shape[1])
@@ -70,7 +70,7 @@ class DyTransInr(nn.Module):
 
     def get_params(self,cond_vec, index, prev_act = None):
         if prev_act is not None:
-            prev_act = prev_act.mean(dim=0).unsqueeze(0) 
+            prev_act = prev_act.mean(dim=0).unsqueeze(0)
             inp = torch.cat((cond_vec,prev_act),dim=1)
         else:
             inp = cond_vec
@@ -94,10 +94,10 @@ class DyTransInr(nn.Module):
         #set_trace()
         params[name] = wb.squeeze(0)
 
-        
+
         #set_trace()
         return params
-         
+
     def forward(self, data):
         #TODO change tokens
         dtokens = data #self.tokenizer(data)
@@ -109,7 +109,7 @@ class DyTransInr(nn.Module):
         #trans_out = trans_out[:, -len(self.wtokens):, :]
         trans_out = self.transformer_encoder(dtokens, data)
         cond_vec = trans_out.mean(dim=1)
-        
+
         params = dict()
         for name, shape in self.hyponet_param_shapes:
             wb = einops.repeat(self.base_params[name], 'n m -> b n m', b=B)
@@ -125,7 +125,7 @@ class DyTransInr(nn.Module):
             w = F.normalize(w * x, dim=1)
 
             wb = w#torch.cat([w, b], dim=1)
-            #set_trace()    
+            #set_trace()
             params[name] = wb.squeeze(0)
         #set_trace()
         return params
