@@ -64,7 +64,7 @@ class MLP(nn.Module):
             if self.opt.conditioning_model == 'T5':
                 self.hyper_transform = nn.Linear(512,64)
             elif self.opt.conditioning_model == 'bert':
-                self.hyper_transform = nn.Linear(1024,256)
+                self.hyper_transform = nn.Linear(768,256)
             nn.init.orthogonal_(self.hyper_transform.weight)
 
         if self.nerf_conditioning:
@@ -80,7 +80,7 @@ class MLP(nn.Module):
                         self.transform_list.append(nn.Sequential(wn(nn.Linear(512, self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim))))
                         self.apply_init(model = self.transform_list[i], init='ortho')
                     elif self.opt.conditioning_model  == 'bert':
-                        self.transform_list.append(nn.Sequential(wn(nn.Linear(1024, self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim))))
+                        self.transform_list.append(nn.Sequential(wn(nn.Linear(768, self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim))))
                         self.apply_init(model = self.transform_list[i], init='ortho')
 
 
@@ -88,7 +88,7 @@ class MLP(nn.Module):
                 #self.transform = nn.Sequential(wn(nn.Linear(512+512 , self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))
                 #self.transform = nn.Sequential(wn(nn.Linear(512 , self.dim_hidden *2)), nn.ReLU(), wn(nn.Linear(self.dim_hidden*2, transform_dim)))
                 if self.opt.conditioning_model == 'bert':
-                    self.transform = nn.Linear(1024 + 256,transform_dim)
+                    self.transform = nn.Linear(768 + 256,transform_dim)
                 else:
                     self.transform = nn.Linear(512+256,transform_dim)
                 nn.init.orthogonal_(self.transform.weight)
@@ -245,10 +245,6 @@ class MLP(nn.Module):
                         interp_scene_vec = self.hyper_transformer.get_scene_vec(interp_tokens)
                         processed_scene_vec = interp * processed_scene_vec + (1-interp) * interp_scene_vec
 
-                        if self.opt.debug:
-                            print(f"Interp: {interp:0.2f}")
-                            print(f"Avg diff b/w interp vec and interp og: {torch.mean(processed_scene_vec - interp_scene_vec).item()}")
-
             #self.set_params(params)
         hyper_inp = None
         for l in range(self.num_layers):
@@ -348,8 +344,8 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             self.nerf_conditioning = True
         elif opt.conditioning_model == 'bert':
             from transformers import AutoTokenizer, AutoModel
-            self.text_model_tokenizer = AutoTokenizer.from_pretrained("bert-large-uncased-whole-word-masking", cache_dir = "./local_dir")
-            self.text_model = AutoModel.from_pretrained("bert-large-uncased-whole-word-masking", cache_dir = "./local_dir").cuda()
+            self.text_model_tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-mpnet-base-v2", cache_dir = "./local_dir")
+            self.text_model = AutoModel.from_pretrained("sentence-transformers/all-mpnet-base-v2", cache_dir = "./local_dir").cuda()
             for parameters in list(self.text_model.parameters()):
                 parameters.requires_grad = False
 
@@ -493,11 +489,10 @@ class HyperTransNeRFNetwork(NeRFRenderer):
                 ref_text = hyper_net_phrase
                 if self.opt.debug:
                     print(ref_text)
-                #set_trace()
             conditioning_vector = {}
             text_token = self.text_model_tokenizer(ref_text, padding=True, truncation=True, return_tensors='pt')
             text_token['input_ids'] = text_token['input_ids'].cuda()
-            text_token['token_type_ids'] = text_token['token_type_ids'].cuda()
+            # text_token['token_type_ids'] = text_token['token_type_ids'].cuda()
             text_token['attention_mask'] = text_token['attention_mask'].cuda()
             if self.opt.fine_tune_conditioner:
                 model_output = self.text_model(**text_token)
@@ -506,16 +501,8 @@ class HyperTransNeRFNetwork(NeRFRenderer):
                     model_output = self.text_model(**text_token)
             conditioning_tokens = model_output[0]
 
-            if self.opt.debug and self.opt.interp == "bert":
-                words = self.opt.text[index].split()
-                styleidx = self.opt.textstyleidx[index]
-                objidx = self.opt.objstyleidx[index]
-                style = words[styleidx[0]:styleidx[1]]
-                obj = words[objidx[0]:objidx[1]]
-                print(f"Sentence length: {len(words)}, Tokens length: {len(conditioning_tokens)}")
-                print(f"Style: {style}, Object: {obj}")
-
             inp_vec = mean_pooling(model_output, text_token['attention_mask'])
+            conditioning_vector['text_tokens'] = text_token
             conditioning_vector['input_vec']  = inp_vec/inp_vec.norm(dim=-1, keepdim=True)
             conditioning_vector['input_tokens'] = conditioning_tokens/conditioning_tokens.norm(dim=-1, keepdim = True )
 
@@ -557,38 +544,115 @@ class HyperTransNeRFNetwork(NeRFRenderer):
         self.conditioning_vector[self.scene_id] = temp
 
         # Interpolate conditioning vector if interpolating bert tokens
-        if self.opt.interp == "bert" and self.interpval != 1 and self.opt.phrasing:
+        if self.opt.interp == "bert" and self.interpval != 1:
             # TODO: Interpolate only the object/color token depending on the setting
             temp = self.get_conditioning_vec(index = self.scene_id, interp=True)
-            if self.opt.debug:
-                print(f"Original cond vector: {self.conditioning_vector[self.scene_id]['input_tokens'].shape}, Interp tokens: {temp['input_tokens'].shape}, Interp: {self.interpval}")
+            # if self.opt.debug:
+            #     text = self.opt.text[self.scene_id]
+            #     styleidx = self.opt.textstyleidx[self.scene_id]
+            #     objidx = self.opt.objstyleidx[self.scene_id]
+            #     style = text[styleidx[0]:styleidx[1]]
+            #     obj = text[objidx[0]:objidx[1]]
+
+            #     interptext = self.opt.interptext[self.scene_id]
+            #     interpstyleidx = self.opt.interpstyleidx[self.scene_id]
+            #     interpobjidx = self.opt.interpobjidx[self.scene_id]
+            #     interpstyle = interptext[interpstyleidx[0]:interpstyleidx[1]]
+            #     interpobj = interptext[interpobjidx[0]:interpobjidx[1]]
+            #     print(f"\nID: {self.scene_id}. Style: {style}, Object: {obj}, Interp style: {interpstyle}, interp obj: {interpobj}")
 
             if self.opt.phrasing:
                 self.conditioning_vector[self.scene_id]['input_tokens'] = self.interpval * self.conditioning_vector[self.scene_id]['input_tokens'] + (1 - self.interpval) * temp['input_tokens']
             else:
                 # Find the indices of the tokens which correspond to color/obj respectively
-                # TODO: need to TRAIN on above
-                if self.opt.textstyleidx and self.opt.interpstyleidx:
+                # TODO: if pooling then need to train on poolstyle
+                if self.opt.textstyleidx and self.opt.interpstyleidx and not self.opt.interponlyobj:
                     textstyleidx = self.opt.textstyleidx[self.scene_id]
                     interpstyleidx = self.opt.interpstyleidx[self.scene_id]
 
-                    if self.opt.poolstyle:
-                        stylepool = torch.mean(self.conditioning_vector[self.scene_id]['input_tokens'][(textstyleidx[0]+1):(textstyleidx[1]+1)], dim=0)
-                        interpool = torch.mean(temp['input_tokens'][(interpstyleidx[0] + 1):(interpstyleidx[1] + 1)], dim=0)
-                        self.conditioning_vector[self.scene_id]['input_tokens'][(textstyleidx[0]+1):(textstyleidx[1]+1)] = self.interpval * stylepool + (1 - self.interpval) * interpool
-                    else:
-                        self.conditioning_vector[self.scene_id]['input_tokens'][(textstyleidx[0]+1):(textstyleidx[1]+1)] = self.interpval * self.conditioning_vector[self.scene_id]['input_tokens'][(textstyleidx[0] + 1):(textstyleidx[1] + 1)] + (1 - self.interpval) * temp['input_tokens'][(interpstyleidx[0] + 1):(interpstyleidx[1] + 1)]
+                    # Find mapping from tokens back to words to do interpolation
+                    tstart = tend = 0
+                    curtoken = self.conditioning_vector[self.scene_id]['text_tokens']
+                    for i in range(1, len(curtoken['input_ids'][0])):
+                        tmpchars = curtoken.token_to_chars(i)
+                        if tmpchars[0] == textstyleidx[0]:
+                            tstart = i-1
+                        if tmpchars[1] == textstyleidx[1]:
+                            tend = i
+                            break
 
-                if self.opt.objstyleidx and self.opt.interpobjidx:
+                        # if self.opt.debug:
+                        #     print(f"Current text token char mapping: {self.opt.text[self.scene_id][tmpchars[0]:tmpchars[1]]}")
+
+                    if tstart == tend == 0:
+                        raise ValueError(f"Couldn't find tokens corresponding to text style {self.opt.text[self.scene_id][textstyleidx[0]:textstyleidx[1]]}")
+
+                    interptstart = interptend = 0
+                    for i in range(1, len(temp['text_tokens']['input_ids'][0])):
+                        tmpchars = temp['text_tokens'].token_to_chars(i)
+                        if tmpchars[0] == interpstyleidx[0]:
+                            interptstart = i-1
+                        if tmpchars[1] == interpstyleidx[1]:
+                            interptend = i
+                            break
+
+                        # if self.opt.debug:
+                        #     print(f"Current interp text token char mapping: {self.opt.interptext[self.scene_id][tmpchars[0]:tmpchars[1]]}")
+
+                    if interptstart == interptend == 0:
+                        raise ValueError(f"Couldn't find tokens corresponding to interp text style {self.opt.interptext[self.scene_id][interpstyleidx[0]:interpstyleidx[1]]}")
+
+                    if self.opt.poolstyle:
+                        stylepool = torch.mean(self.conditioning_vector[self.scene_id]['input_tokens'][tstart:tend], dim=0)
+                        interpool = torch.mean(temp['input_tokens'][interptstart:interptend], dim=0)
+                        self.conditioning_vector[self.scene_id]['input_tokens'][tstart:tend] = self.interpval * stylepool + (1 - self.interpval) * interpool
+                    else:
+                        # NOTE: currently assume we're only batching one pair of interp prompts at a time!!!
+                        assert tend - tstart == interptend - interptstart, f"Different token lengths found for style interpolation! Original ({self.opt.text[self.scene_id][textstyleidx[0]:textstyleidx[1]]}): {tstart}:{tend}. Interp ({self.opt.interptext[self.scene_id][interpstyleidx[0]:interpstyleidx[1]]}): {interptstart}:{interptend}"
+                        self.conditioning_vector[self.scene_id]['input_tokens'][:,tstart:tend] = self.interpval * self.conditioning_vector[self.scene_id]['input_tokens'][:,tstart:tend] + (1 - self.interpval) * temp['input_tokens'][:,interptstart:interptend]
+
+                if self.opt.objstyleidx and self.opt.interpobjidx and not self.opt.interponlystyle:
                     objstyleidx = self.opt.objstyleidx[self.scene_id]
                     interpobjidx = self.opt.interpobjidx[self.scene_id]
 
+                    # Find mapping from tokens back to words to do interpolation
+                    tstart = tend = 0
+                    curtoken = self.conditioning_vector[self.scene_id]['text_tokens']
+                    for i in range(1, len(curtoken['input_ids'][0])):
+                        tmpchars = curtoken.token_to_chars(i)
+                        if tmpchars[0] == objstyleidx[0]:
+                            tstart = i-1
+                        if tmpchars[1] == objstyleidx[1]:
+                            tend = i
+                            break
+                        # if self.opt.debug:
+                        #     print(f"Current obj text token char mapping: {self.opt.text[self.scene_id][tmpchars[0]:tmpchars[1]]}")
+
+                    if tstart == tend == 0:
+                        raise ValueError(f"Couldn't find tokens corresponding to text obj {self.opt.text[self.scene_id][objstyleidx[0]:objstyleidx[1]]}")
+
+                    interptstart = interptend = 0
+                    for i in range(1, len(temp['text_tokens']['input_ids'][0])):
+                        tmpchars = temp['text_tokens'].token_to_chars(i)
+                        if tmpchars[0] == interpobjidx[0]:
+                            interptstart = i-1
+                        if tmpchars[1] == interpobjidx[1]:
+                            interptend = i
+                            break
+                        # if self.opt.debug:
+                        #     print(f"Current obj interptext token char mapping: {self.opt.interptext[self.scene_id][tmpchars[0]:tmpchars[1]]}")
+
+                    if interptstart == interptend == 0:
+                        raise ValueError(f"Couldn't find tokens corresponding to interp text style {self.opt.interptext[self.scene_id][interpobjidx[0]:interpobjidx[1]]}")
+
                     if self.opt.poolstyle:
-                        objpool = torch.mean(self.conditioning_vector[self.scene_id]['input_tokens'][(objstyleidx[0]+1):(objstyleidx[1]+1)], dim=0)
-                        objinterpool = torch.mean(temp['input_tokens'][(interpobjidx[0] + 1):(interpobjidx[1] + 1)], dim=0)
-                        self.conditioning_vector[self.scene_id]['input_tokens'][(objstyleidx[0]+1):(objstyleidx[1]+1)] = self.interpval * objpool + (1 - self.interpval) * objinterpool
+                        stylepool = torch.mean(self.conditioning_vector[self.scene_id]['input_tokens'][tstart:tend], dim=0)
+                        interpool = torch.mean(temp['input_tokens'][interptstart:interptend], dim=0)
+                        self.conditioning_vector[self.scene_id]['input_tokens'][tstart:tend] = self.interpval * stylepool + (1 - self.interpval) * interpool
                     else:
-                        self.conditioning_vector[self.scene_id]['input_tokens'][(objstyleidx[0] + 1):(objstyleidx[1] + 1)] = self.interpval * self.conditioning_vector[self.scene_id]['input_tokens'][(objstyleidx[0] + 1):(objstyleidx[1] + 1)] + (1 - self.interpval) * temp['input_tokens'][(interpobjidx[0] + 1):(interpobjidx[1] + 1)]
+                        # NOTE: currently assume we're only batching one pair of interp prompts at a time!!!
+                        assert tend - tstart == interptend - interptstart, f"Different token lengths found for obj interpolation! Original ({self.opt.text[self.scene_id][objstyleidx[0]:objstyleidx[1]]}): {tstart}:{tend}. Interp ({self.opt.interptext[self.scene_id][interpobjidx[0]:interpobjidx[1]]}): {interptstart}:{interptend}"
+                        self.conditioning_vector[self.scene_id]['input_tokens'][:, tstart:tend] = self.interpval * self.conditioning_vector[self.scene_id]['input_tokens'][:,tstart:tend] + (1 - self.interpval) * temp['input_tokens'][:,interptstart:interptend]
 
         # Otherwise interpolate dynamic hypernet intermediate representation
         elif self.opt.interp == "hyper" and self.interpval:

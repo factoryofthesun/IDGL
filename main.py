@@ -40,6 +40,8 @@ if __name__ == '__main__':
     parser.add_argument('--interp_engineer_suffix', type=str, default=None, help="text prompt")
     parser.add_argument('--interp', type=str, default=None, choices={'bert', 'hyper'}, help="interpolation mode")
     parser.add_argument('--interpfreq', type=int, default=2, help="interpolation frequencies (endpoint inclusive)")
+    parser.add_argument('--interponlystyle', action='store_true')
+    parser.add_argument('--interponlyobj', action='store_true')
     parser.add_argument('--textindex', type=str, default=None, help="npy array containing indices to interpolate for txt file")
     parser.add_argument('--interpindex', type=str, default=None, help="npy array containing indices to interpolate for interp file")
     parser.add_argument('--save_mesh', action='store_true', help="export an obj mesh with texture")
@@ -103,6 +105,7 @@ if __name__ == '__main__':
     parser.add_argument('--project_name', type=str, default='test')
     parser.add_argument('--exp_name', type=str, default='test')
     parser.add_argument('--overwrite', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--overwritetest', action='store_true', help="overwrite current test directory")
     parser.add_argument('--testdir', type = str, default='inference')
 
     ###Network options
@@ -150,34 +153,49 @@ if __name__ == '__main__':
         if len(opt.text) == 0:
             opt.textstyleidx = [0 for _ in range(len(lines))]
         else:
-            opt.textstyleidx = [len(line.split()) for line in opt.text]
+            opt.textstyleidx = [len(line)+1 for line in opt.text] ## Accounts for the space
 
         lines = [" ".join(line.split()) for line in lines]
-        opt.text = [opt.text[i] + " " + " ".join(lines[i].split())  for i in range(min(len(opt.text), len(lines)))]
+        opt.text = [opt.text[i] + " " + lines[i]  for i in range(min(len(opt.text), len(lines)))]
 
         # Save ending indices of style prompt
-        opt.textstyleidx = [(opt.textstyleidx[i], len(opt.text[i].split())-1) for i in range(len(opt.text))]
+        opt.textstyleidx = [(opt.textstyleidx[i], len(opt.text[i])) for i in range(len(opt.text))]
+
+        for i in range(len(opt.textstyleidx)):
+            assert lines[i] == opt.text[i][opt.textstyleidx[i][0]:opt.textstyleidx[i][1]], f"Mismatched color prompt and idx: {lines[i]} vs {opt.text[opt.textstyleidx[i][0]:opt.textstyleidx[i][1]]}"
 
     if opt.object:
         with open(opt.object) as f:
             lines = f.readlines()
 
         # Save starting indices of obj prompt
-        opt.objstyleidx = [len(line.split()) for line in opt.text]
+        opt.objstyleidx = [len(line)+1 for line in opt.text] ## Accounts for the space
 
         lines = [" ".join(line.split()) for line in lines]
-        opt.text = [opt.text[i] + " " + " ".join(lines[i].split())  for i in range(min(len(opt.text), len(lines)))]
+        opt.text = [opt.text[i] + " " + lines[i]  for i in range(min(len(opt.text), len(lines)))]
 
         # Save ending indices of obj prompt
-        opt.objstyleidx = [(opt.objstyleidx[i], len(opt.text[i].split())-1) for i in range(len(opt.text))]
+        opt.objstyleidx = [(opt.objstyleidx[i], len(opt.text[i])) for i in range(len(opt.text))]
+
+        for i in range(len(opt.objstyleidx)):
+            assert lines[i] == opt.text[i][opt.objstyleidx[i][0]:opt.objstyleidx[i][1]], f"Mismatched obj prompt and idx: {lines[i]} vs {opt.text[opt.objstyleidx[i][0]:opt.objstyleidx[i][1]]}"
 
     if opt.engineer_suffix:
         with open(opt.engineer_suffix) as f:
             lines = f.readlines()
         lines = [" ".join(line.split()) for line in lines]
-        opt.text = [opt.text[i] + " " + " ".join(lines[i].split()) for i in range(min(len(opt.text), len(lines)))]
+        opt.text = [opt.text[i] + " " + lines[i] for i in range(min(len(opt.text), len(lines)))]
 
+    # Clean
+    import re
+    opt.text = [re.sub(r'\s([,?.!"](?:\s|$))', r'\1', line) for line in opt.text]
     opt.text = [" ".join(line.split()) for line in opt.text]
+
+    if opt.debug:
+        opt.text = opt.text[3:]
+        opt.objstyleidx = opt.objstyleidx[3:]
+        opt.textstyleidx = opt.textstyleidx[3:]
+
     print(opt.text)
 
     # Interpolation file
@@ -194,55 +212,68 @@ if __name__ == '__main__':
                 lines = f.readlines()
 
             # Save starting indices of style prompt
-            opt.interpstyleidx = [len(line.split()) for line in opt.interptext]
+            opt.interpstyleidx = [len(line)+1 for line in opt.interptext]
 
             lines = [" ".join(line.split()) for line in lines]
             opt.interptext = [opt.interptext[i] + " " + " ".join(lines[i].split())  for i in range(min(len(opt.interptext), len(lines)))]
 
             # Save ending indices of style prompt
-            opt.interpstyleidx = [(opt.interpstyleidx[i], len(opt.interptext[i].split())-1) for i in range(len(opt.interptext))]
+            opt.interpstyleidx = [(opt.interpstyleidx[i], len(opt.interptext[i])) for i in range(len(opt.interptext))]
+
+            for i in range(len(opt.interpstyleidx)):
+                assert lines[i] == opt.interptext[i][opt.interpstyleidx[i][0]:opt.interpstyleidx[i][1]], f"Mismatched color prompt and idx: {lines[i]} vs {opt.interptext[opt.interpstyleidx[i][0]:opt.interpstyleidx[i][1]]}"
 
         if opt.interp_object:
             with open(opt.interp_object) as f:
                 lines = f.readlines()
 
             # Save starting indices of obj prompt
-            opt.interpobjidx = [len(line.split()) for line in opt.interptext]
+            opt.interpobjidx = [len(line)+1 for line in opt.interptext]
 
             lines = [" ".join(line.split()) for line in lines]
             opt.interptext = [opt.interptext[i] + " " + " ".join(lines[i].split())  for i in range(min(len(opt.interptext), len(lines)))]
 
             # Save ending indices of obj prompt
-            opt.interpobjidx = [(opt.interpobjidx[i], len(opt.interptext[i].split())-1) for i in range(len(opt.interptext))]
+            opt.interpobjidx = [(opt.interpobjidx[i], len(opt.interptext[i])) for i in range(len(opt.interptext))]
+
+            for i in range(len(opt.objstyleidx)):
+                assert lines[i] == opt.interptext[i][opt.interpobjidx[i][0]:opt.interpobjidx[i][1]], f"Mismatched obj prompt and idx: {lines[i]} vs {opt.interptext[opt.interpobjidx[i][0]:opt.interpobjidx[i][1]]}"
 
         if opt.interp_engineer_suffix:
             with open(opt.interp_engineer_suffix) as f:
                 lines = f.readlines()
             lines = [" ".join(line.split()) for line in lines]
             opt.interptext = [opt.interptext[i] + " " + " ".join(lines[i].split()) for i in range(min(len(opt.interptext), len(lines)))]
+
+        opt.interptext = [re.sub(r'\s([,?.!"](?:\s|$))', r'\1', line) for line in opt.interptext]
         opt.interptext = [" ".join(line.split()) for line in opt.interptext]
+
+        if opt.debug:
+            opt.interptext = opt.interptext[3:]
+            opt.interpobjidx = opt.interpobjidx[3:]
+            opt.interpstyleidx = opt.interpstyleidx[3:]
 
         # Duplicate text for each possible pairing and also interpolation float value
         interpvals = np.linspace(0, 1, opt.interpfreq)
 
         # Map each individual text line to interptext * interpfreq values
-        textlen = len(opt.interptext)
+        textlen = len(opt.text)
         interplen = len(opt.interptext)
-        opt.text = [text for text in opt.text for _ in range(interplen * opt.interpfreq)]
+        opt.text = [text for text in opt.text for _ in range(interplen)]
+        opt.objstyleidx = [text for text in opt.objstyleidx for _ in range(interplen)]
+        opt.textstyleidx = [text for text in opt.textstyleidx for _ in range(interplen)]
 
-        opt.objstyleidx = [text for text in opt.objstyleidx for _ in range(interplen * opt.interpfreq)]
-        opt.textstyleidx = [text for text in opt.textstyleidx for _ in range(interplen * opt.interpfreq)]
-
-        opt.interptext = [text for text in opt.interptext for _ in range(opt.interpfreq)]
         opt.interptext *= textlen
-
-        opt.interpstyleidx = [idx for idx in opt.interpstyleidx for _ in range(opt.interpfreq)]
         opt.interpstyleidx *= textlen
-        opt.interpobjidx = [idx for idx in opt.interpobjidx for _ in range(opt.interpfreq)]
         opt.interpobjidx *= textlen
 
         # Remove duplicates
         assert len(opt.text) == len(opt.interptext), f"Expected text length {len(opt.text)} to equal interptext length {len(opt.interptext)}"
+        assert len(opt.text) == len(opt.objstyleidx), f"Expected text length {len(opt.text)} to equal obj prompt length {len(opt.objstyleidx)}"
+        assert len(opt.text) == len(opt.textstyleidx), f"Expected text length {len(opt.text)} to equal style prompt length {len(opt.textstyleidx)}"
+        assert len(opt.text) == len(opt.interpstyleidx), f"Expected text length {len(opt.text)} to equal interp style prompt length {len(opt.interpstyleidx)}"
+        assert len(opt.text) == len(opt.interpobjidx), f"Expected text length {len(opt.text)} to equal interp obj prompt length {len(opt.interpobjidx)}"
+
         newtext = []
         newinterp = []
         new_textstyleidx = []
@@ -262,6 +293,8 @@ if __name__ == '__main__':
 
                 new_interpstyleidx.append(opt.interpstyleidx[i])
                 new_interpobjidx.append(opt.interpobjidx[i])
+
+                doneprompts.add(opt.text[i] + opt.interptext[i])
         if opt.debug:
             print(f"Found {len(opt.text) - len(newtext)} duplicate prompts between text and interp")
             promptset = [val for val in zip(newtext, newinterp)]
@@ -276,8 +309,6 @@ if __name__ == '__main__':
         opt.interp = None
         opt.interpfreq = None
         opt.interptext = None
-        opt.textstyleidx = None
-        opt.objstyleidx = None
         opt.interpstyleidx = None
         opt.interpobjidx = None
         interpvals = None
@@ -292,7 +323,7 @@ if __name__ == '__main__':
         opt.interpindex = np.load(opt.interpindex)
 
     opt.workspace = os.path.join("outputs", opt.project_name, opt.exp_name)
-    if opt.overwrite and os.path.exists(opt.workspace):
+    if opt.overwrite and os.path.exists(opt.workspace) and not opt.test:
         clear_directory(opt.workspace)
 
     if opt.wandb_flag:
@@ -347,22 +378,43 @@ if __name__ == '__main__':
             size = 10
         test_loader = NeRFDataset(opt, device=device, type='test', H=opt.H, W=opt.W, size=size).dataloader()
         Path(os.path.join(opt.workspace, opt.testdir)).mkdir(exist_ok=True, parents=True)
-        clear_directory(os.path.join(opt.workspace, opt.testdir))
-        for idx, val in enumerate(opt.text):
-            interpval = None
-            if interpvals is not None:
-                interpval = interpvals[idx % len(interpvals)]
 
-            if opt.debug:
-                print(f"Scene id: {idx}, Text: {val}, Interpval: {interpval}")
-            name = val.lower().replace(" ", "_")
+        if opt.overwritetest:
+            clear_directory(os.path.join(opt.workspace, opt.testdir))
+
+        for idx, val in enumerate(opt.text):
             if interpvals is not None:
-                name = val.lower().replace(" ", "_") + f"_interp{interpval:0.2f}_" + opt.interptext[idx].lower().replace(" ", "_")
+                for interpval in interpvals:
+                    name = val.lower().replace(" ", "_") + "_!_" + opt.interptext[idx].lower().replace(" ", "_") + f"_interp{interpval:0.2f}"
+                    if opt.phrasing:
+                        name = "phrasing_" + name
+
+                    # Skip already done
+                    gifpath = os.path.join(opt.workspace, opt.testdir, name + "_0_rgb.gif")
+                    if os.path.exists(gifpath):
+                        print(f"{gifpath} result already exists.")
+                        continue
+
+                    if opt.debug:
+                        print(f"Scene id: {idx}, Text: {val}, Interptext: {opt.interptext[idx]}, Interpval: {interpval}")
+
+                    trainer.test(test_loader, name=name, save_path=os.path.join(opt.workspace, opt.testdir),
+                                scene_id=idx, interpval=interpval)
+            else:
+                if opt.debug:
+                    print(f"Scene id: {idx}, Text: {val}, Interpval: {interpval}")
+
+                name = val.lower().replace(" ", "_")
                 if opt.phrasing:
                     name = "phrasing_" + name
 
-            trainer.test(test_loader, name=name, save_path=os.path.join(opt.workspace, opt.testdir),
-                         scene_id=idx, interpval=interpval)
+                # Skip already done
+                gifpath = os.path.join(opt.workspace, opt.testdir, name + ".gif")
+                if os.path.exists(gifpath):
+                    print(f"{gifpath} result already exists.")
+                    continue
+                trainer.test(test_loader, name=name, save_path=os.path.join(opt.workspace, opt.testdir),
+                            scene_id=idx)
 
         if opt.save_mesh:
             trainer.save_mesh(resolution=256)

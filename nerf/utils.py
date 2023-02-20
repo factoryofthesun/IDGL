@@ -552,7 +552,7 @@ class Trainer(object):
         self.model.module.epoch = self.epoch
         self.model.module.sigma_net.epoch = self.epoch
 
-        print(f"Name: {name}, interpval: {interpval:0.2f}")
+        print(f"Name: {name}, Interpval: {interpval:0.2f}")
 
         if save_path is None:
             save_path = os.path.join(self.workspace, 'results')
