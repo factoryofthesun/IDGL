@@ -6,7 +6,8 @@ from nerf.utils import *
 from optimizer import Shampoo
 import wandb
 from pdb import set_trace
-torch.backends.cudnn.enabled = True
+import copy
+torch.backends.cudnn.enabled = True 
 torch.backends.cudnn.benchmark = True
 # from nerf.gui import NeRFGUI
 
@@ -86,7 +87,11 @@ if __name__ == '__main__':
     parser.add_argument('--lambda_entropy', type=float, default=1e-4, help="loss scale for alpha entropy")
     parser.add_argument('--lambda_opacity', type=float, default=0, help="loss scale for alpha value")
     parser.add_argument('--lambda_orient', type=float, default=1e-2, help="loss scale for orientation")
-
+    parser.add_argument('--lambda_stable_diff', type=float, default=1, help="loss scale for alpha entropy")
+    parser.add_argument('--lambda_teacher_image', type=float, default=1, help="loss scale for alpha value")
+    parser.add_argument('--lambda_rgb', type=float, default=1, help="loss scale for alpha entropy")
+    parser.add_argument('--lambda_sigma', type=float, default=1, help="loss scale for alpha value")
+    parser.add_argument('--lambda_depth', type=float, default=1, help="loss scale for alpha entropy")
 
     ### stable training options
     parser.add_argument('--clip_grad', action='store_true', help="overwrite current experiment")
@@ -124,16 +129,25 @@ if __name__ == '__main__':
     parser.add_argument('--condition_trans', action = 'store_true')
     parser.add_argument('--phrasing', action = 'store_true')
     parser.add_argument('--curricullum', action = 'store_true')
-
+    ### Distillation options
+    parser.add_argument('--load_teachers', type=str, default=None)
+    parser.add_argument('--teacher_size', type = int, default = 1 ) 
     #### Other option
     parser.add_argument('--mem', action='store_true', help="overwrite current experiment")
     parser.add_argument('--dummy', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--test_teachers', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--not_diff_loss', action='store_true', help="overwrite current experiment") 
+    parser.add_argument('--dist_image_loss', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--dist_sigma_rgb_loss', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--dist_depth_loss', action='store_true', help="overwrite current experiment")
+    parser.add_argument('--skip_list', nargs='+', type = int, default = None)
     # parser.add_argument('--radius', type=float, default=3, help="default GUI camera radius from center")
     # parser.add_argument('--fovy', type=float, default=60, help="default GUI camera fovy")
     # parser.add_argument('--light_theta', type=float, default=60, help="default GUI light direction in [0, 180], corresponding to elevation [90, -90]")
     # parser.add_argument('--light_phi', type=float, default=0, help="default GUI light direction in [0, 360), azimuth")
     # parser.add_argument('--max_spp', type=int, default=1, help="GUI rendering max sample per pixel")
     opt = parser.parse_args()
+
     opt.textstyleidx = None
     opt.objstyleidx = None
     opt.interpstyleidx = None
@@ -190,12 +204,12 @@ if __name__ == '__main__':
     import re
     opt.text = [re.sub(r'\s([,?.!"](?:\s|$))', r'\1', line) for line in opt.text]
     opt.text = [" ".join(line.split()) for line in opt.text]
-
+    opt.num_scenes = len(opt.text)
     if opt.debug:
         opt.text = opt.text[3:]
         opt.objstyleidx = opt.objstyleidx[3:]
         opt.textstyleidx = opt.textstyleidx[3:]
-
+        
     print(opt.text)
 
     # Interpolation file
@@ -364,6 +378,39 @@ if __name__ == '__main__':
         model = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim,wandb_obj=wandb ), device_ids = [0])
     else:
         model = NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim)
+
+
+    if opt.load_teachers is not None: 
+        with open(opt.load_teachers) as f:
+            lines = f.readlines()
+        lines = [line.replace("\n", "") for line in lines]
+        opt.teacher_paths = lines
+
+        model.teacher_models = []
+        for idx, path in enumerate(opt.teacher_paths):
+            print(path) 
+            model_path =  glob.glob(opt.teacher_paths[idx]+"/checkpoints/*")[-1]
+            model_teacher = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim,wandb_obj=wandb, teacher_flag = True), device_ids = [0])
+        #TODO fix these
+            
+            #model_teacher.module.scene_id = idx
+            model_teacher.module.sigma_net.epoch = 0
+            model_teacher.module.load_checkpoint( checkpoint = model_path)
+            model.teacher_models.append(model_teacher)
+            if opt.test_teachers:
+                for index in range(opt.num_scenes):
+                    model_teacher.module.scene_id = index % opt.teacher_size
+                    #model_teacher.module.scene_id = idx
+                    model_teacher.module.load_checkpoint( checkpoint = model_path)
+                    from nerf.sd import StableDiffusion
+                    guidance = StableDiffusion('cuda')
+                    trainer = Trainer('df', opt, model_teacher, guidance, device='cuda', workspace=opt.workspace, fp16=opt.fp16, use_checkpoint='scratch')
+                    test_loader = NeRFDataset(opt, device='cuda', type='test', H=opt.H, W=opt.W, size=100).dataloader()
+                    model_teacher.module.sigma_net.epoch = 0
+                    trainer.test(test_loader, scene_id = idx)
+    
+
+     
     #print(model)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -435,7 +482,7 @@ if __name__ == '__main__':
 
         train_loader = NeRFDataset(opt, device=device, type='train', H=opt.h, W=opt.w, size=100).dataloader()
 
-        scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter: 1e-3 if iter < 500 else  0.1 ** min(iter / opt.iters, 1))
+        scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter: 1e-3 if iter < 100 else  0.1 ** min(iter / opt.iters, 1))
         #scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter:  0.1 ** min(iter / opt.iters, 1))
         # scheduler = lambda optimizer: optim.lr_scheduler.OneCycleLR(optimizer, max_lr=opt.lr, total_steps=opt.iters, pct_start=0.1)
         trainer = Trainer('df', opt, model, guidance, device=device, workspace=opt.workspace, optimizer=optimizer, ema_decay=opt.ema_decay, fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint=opt.ckpt, eval_interval=opt.eval_interval, scheduler_update_every_step=True, wandb_obj = wandb)

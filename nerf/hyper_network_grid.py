@@ -20,7 +20,8 @@ from .transformer import TransformerEncoder
 from .hyper_transformer import TransInr
 from .dynamic_hyper import DyTransInr
 from .layers import batched_linear_mm
-
+import glob
+import copy
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
@@ -58,6 +59,8 @@ class MLP(nn.Module):
         self.wandb_obj = wandb_obj
         self.hyper_flag =  hyper_flag
         net = []
+
+
         if self.hyper_flag:
             print('invoking hyper trans')
             self.transformer_encoder = TransformerEncoder(256, 6,12,16,64, condition_trans = opt.condition_trans)
@@ -177,6 +180,77 @@ class MLP(nn.Module):
             if self.init is not None:
                 self.apply_init()
 
+    def load_teacher(self,opt, checkpoint=None, model_only=True, teacher_id = None):
+        if teacher_id is None:
+            set_trace()
+
+        if checkpoint is None:
+            checkpoint_list = sorted(glob.glob(f'{self.ckpt_path}/*.pth'))
+            if checkpoint_list:
+                checkpoint = checkpoint_list[-1]
+                self.log(f"[INFO] Latest checkpoint is {checkpoint}")
+            else:
+                self.log("[WARN] No checkpoint found, model randomly initialized.")
+                return
+
+        checkpoint_dict = torch.load(checkpoint, map_location=self.device)
+
+        if 'model' not in checkpoint_dict:
+            self.model.load_state_dict(checkpoint_dict)
+            self.log("[INFO] loaded model.")
+            return
+
+        missing_keys, unexpected_keys = self.model.load_state_dict(checkpoint_dict['model'], strict=False)
+        self.log("[INFO] loaded model.")
+        if len(missing_keys) > 0:
+            self.log(f"[WARN] missing keys: {missing_keys}")
+        if len(unexpected_keys) > 0:
+            self.log(f"[WARN] unexpected keys: {unexpected_keys}")
+
+        if self.ema is not None and 'ema' in checkpoint_dict:
+            try:
+                self.ema.load_state_dict(checkpoint_dict['ema'])
+                self.log("[INFO] loaded EMA.")
+            except:
+                self.log("[WARN] failed to loaded EMA.")
+
+        if self.model.module.cuda_ray:
+            if 'mean_count' in checkpoint_dict:
+                self.model.module.mean_count = checkpoint_dict['mean_count']
+            if 'mean_density' in checkpoint_dict:
+                self.model.module.mean_density = checkpoint_dict['mean_density']
+
+        if model_only:
+            return
+
+        self.stats = checkpoint_dict['stats']
+        self.epoch = checkpoint_dict['epoch']
+        self.global_step = checkpoint_dict['global_step']
+        self.log(f"[INFO] load at epoch {self.epoch}, global step {self.global_step}")
+
+        if self.optimizer and 'optimizer' in checkpoint_dict:
+            try:
+                self.optimizer.load_state_dict(checkpoint_dict['optimizer'])
+                self.log("[INFO] loaded optimizer.")
+            except:
+                self.log("[WARN] Failed to load optimizer.")
+
+        if self.lr_scheduler and 'lr_scheduler' in checkpoint_dict:
+            try:
+                self.lr_scheduler.load_state_dict(checkpoint_dict['lr_scheduler'])
+                self.log("[INFO] loaded scheduler.")
+            except:
+                self.log("[WARN] Failed to load scheduler.")
+
+        if self.scaler and 'scaler' in checkpoint_dict:
+            try:
+                self.scaler.load_state_dict(checkpoint_dict['scaler'])
+                self.log("[INFO] loaded scaler.")
+            except:
+                self.log("[WARN] Failed to load scaler.")
+
+        
+
     def apply_init(self, model =None,init =None):
         if model is None:
             model = self.net
@@ -232,6 +306,7 @@ class MLP(nn.Module):
         #if epoch ==11:
         if self.hyper_flag:# and conditioning_vector is not None:
             if conditioning_vector is None:
+                set_trace()
                 params = self.hyper_transformer(self.hyper_inp)
             else:
                 processed_tokens = self.hyper_transform(conditioning_vector[scene_id]['input_tokens'].squeeze(0))
@@ -330,9 +405,9 @@ class HyperTransNeRFNetwork(NeRFRenderer):
                  num_layers_bg=2,
                  hidden_dim_bg=64,
                  wandb_obj = None,
+                 teacher_flag = False
                  ):
-
-        super().__init__(opt)
+        super().__init__(opt, teacher_flag)
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
 
@@ -398,6 +473,7 @@ class HyperTransNeRFNetwork(NeRFRenderer):
             self.conditioning_vector = None
 
         self.encoder, self.in_dim = get_encoder('tiledgrid', input_dim=3, desired_resolution=2048 * self.bound)
+        
 
         self.sigma_net = nn.DataParallel(MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True, init= opt.init, opt = opt, wandb_obj = wandb_obj, hyper_flag = True))
         #self.sigma_net = MLP(self.in_dim, 4, hidden_dim, num_layers, self.nerf_conditioning,bias=True)
@@ -415,7 +491,47 @@ class HyperTransNeRFNetwork(NeRFRenderer):
         else:
             self.bg_net = None
 
-    def get_conditioning_vec(self,index=0, interp=False):
+    def load_checkpoint(self, checkpoint=None, model_only=True):
+
+        if checkpoint is None:
+            checkpoint_list = sorted(glob.glob(f'{self.ckpt_path}/*.pth'))
+            if checkpoint_list:
+                checkpoint = checkpoint_list[-1]
+                self.log(f"[INFO] Latest checkpoint is {checkpoint}")
+            else:
+                self.log("[WARN] No checkpoint found, model randomly initialized.")
+                return
+
+        checkpoint_dict = torch.load(checkpoint, 'cuda')
+       
+        checkpoint_dict['model_renamed']  = {}
+
+        for element in checkpoint_dict['model'].keys():
+            new_key = '.'.join(element.split('.')[1:])
+            checkpoint_dict['model_renamed'][new_key] =  checkpoint_dict['model'][element] 
+
+
+        if 'model' not in checkpoint_dict:
+            self.load_state_dict(checkpoint_dict)
+            self.log("[INFO] loaded model.")
+            return
+
+        missing_keys, unexpected_keys = self.load_state_dict(checkpoint_dict['model_renamed'], strict=False)
+        
+        print("[INFO] loaded teacher model.")
+        if len(missing_keys) > 0:
+            set_trace()
+            print(f"[WARN] missing keys: {missing_keys}")
+
+        if len(unexpected_keys) > 0:
+            set_trace()
+            print(f"[WARN] unexpected keys: {unexpected_keys}")
+
+        if model_only:
+            return
+
+
+    def get_conditioning_vec(self,index=0):
         conditioning_vector = None
 
         if self.conditioning_model == 'CLIP':
@@ -723,7 +839,6 @@ class HyperTransNeRFNetwork(NeRFRenderer):
                 color = (normal + 1) / 2
             else: # 'lambertian'
                 color = albedo * lambertian.unsqueeze(-1)
-
         return sigma, color, normal
 
 
@@ -739,7 +854,6 @@ class HyperTransNeRFNetwork(NeRFRenderer):
 
 
     def background(self, d):
-
         h = self.encoder_bg(d) # [N, C]
 
         h = self.bg_net(h)

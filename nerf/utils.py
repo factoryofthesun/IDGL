@@ -23,6 +23,8 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader
 
+from torchvision import utils
+
 import trimesh
 from rich.console import Console
 from torch_ema import ExponentialMovingAverage
@@ -32,6 +34,7 @@ import wandb
 from pdb import set_trace
 import GPUtil
 import gc
+from scipy.stats import bernoulli
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
@@ -207,6 +210,7 @@ class Trainer(object):
         self.device = device if device is not None else torch.device(f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu')
         self.console = Console()
         self.wandb_obj = wandb_obj
+        self.iter_local = 0
 
         # text prompt
         #ref_text = ' '.join(self.opt.text)
@@ -344,6 +348,7 @@ class Trainer(object):
     ### ------------------------------
 
     def train_step(self, data,scene_id):
+        loss = 0
         #cur_mem = torch.cuda.memory_allocated() * 1e-9
         #max_mem = torch.cuda.max_memory_allocated() * 1e-9
         #print('\n  {}'.format(cur_mem/max_mem))
@@ -351,12 +356,21 @@ class Trainer(object):
         #print(dict(self.model.module.sigma_net.named_parameters())['module.hyper_transformer.wtoken_postfc.layer_4.0.weight'].norm())
         #print(dict(self.model.module.text_model.named_parameters())['encoder.layer.10.attention.self.key.weight'].norm())
         self.model.module.scene_id = scene_id
+
+
+
+        if self.opt.load_teachers:
+            self.model.module.teacher_models = self.model.teacher_models
+
+            for model_j in self.model.module.teacher_models:
+                model_j.module.scene_id = scene_id
+
         #check = self.model.module.get_conditioning_vec(index= scene_id)
         #if scene_id == 0:
         #    set_trace()
         #    print(check['input_vec'])
         #self.model.module.conditioning_vector[scene_id] = check
-
+        
         if self.opt.mem:
             torch.cuda.empty_cache()
 
@@ -383,6 +397,7 @@ class Trainer(object):
                 ambient_ratio = 0.1
 
         # _t = time.time()
+       
         bg_color = torch.rand((B * N, 3), device=rays_o.device) # pixel-wise random
         if self.opt.mem:
             torch.cuda.empty_cache()
@@ -393,6 +408,36 @@ class Trainer(object):
             gc.collect()
         pred_rgb = outputs['image'].reshape(B, H, W, 3).permute(0, 3, 1, 2).contiguous() # [1, 3, H, W]
         # torch.cuda.synchronize(); print(f'[TIME] nerf render {time.time() - _t:.4f}s')
+
+        '''
+        if self.opt.load_teachers is not None:
+            #print(scene_id)
+            current_teacher = self.model.teacher_models[scene_id]
+            #current_teacher.eval()
+            set_trace()
+            with torch.no_grad():
+                teacher_outputs = current_teacher.module.render(rays_o, rays_d, staged=False, perturb=True, bg_color=bg_color, ambient_ratio=ambient_ratio, shading=shading, force_all_rays=True, **vars(self.opt))
+                teacher_pred_rgb = teacher_outputs['image'].reshape(B, H, W, 3).permute(0, 3, 1, 2).contiguous() # [1, 3, H, W]
+        '''
+        
+        if self.opt.dist_image_loss:
+            '''
+            if scene_id == 0:
+                 utils.save_image(outputs['teacher_image'].reshape(B, H, W, 3).permute(0, 3, 1, 2).contiguous(), 'scene_3/t{}.png'.format(self.iter_local))
+            else:
+                 utils.save_image(outputs['teacher_image'].reshape(B, H, W, 3).permute(0, 3, 1, 2).contiguous(), 'scene_4/t{}.png'.format(self.iter_local))
+            '''
+            self.iter_local= self.iter_local +1
+
+            loss =  self.opt.lambda_teacher_image * ((pred_rgb - outputs['teacher_image'].reshape(B, H, W, 3).permute(0, 3, 1, 2).contiguous())**2).mean()
+
+        if self.opt.dist_sigma_rgb_loss:
+            set_trace()
+            loss  = loss + self.opt.lambda_rgb* ((outputs['rbgs'] - outputs['teacher_rbgs'] ) **2).mean()
+            loss  =  loss + self.opt.lambda_sigma *((outputs['sigmas'] - outputs['teacher_sigmas'] )**2).mean()
+
+        if self.opt.dist_depth_loss:
+            loss = loss +  self.opt.lambda_depth* ((outputs['depth'] - outputs['teacher_depth'])**2).mean()
 
         # print(shading)
         # torch_vis_2d(pred_rgb[0])
@@ -405,7 +450,14 @@ class Trainer(object):
 
         # encode pred_rgb to latents
         # _t = time.time()
-        loss = self.guidance.train_step(text_z, pred_rgb)
+
+
+        if not self.opt.not_diff_loss:
+            loss = loss+ self.opt.lambda_stable_diff* self.guidance.train_step(text_z, pred_rgb)
+
+        #if self.opt.load_teachers is not None:
+        #    loss = self.opt.lambda_stable_diff*loss +  self.opt.lambda_teacher*teacher_loss + 
+       
 
         #if self.wandb_obj is not None:
         #    self.wandb_obj.log({'guidance_loss':loss.item()})
@@ -522,11 +574,15 @@ class Trainer(object):
                 self.save_checkpoint(full=True, best=False)
 
             #GPUtil.showUtilization()
+            X = bernoulli(.08) 
             if self.epoch % self.eval_interval == 0:
                 for idx, val in enumerate(self.text_z):
                     self.evaluate_one_epoch(valid_loader, scene_id= idx)
                     self.save_checkpoint(full=False, best=True)
-                    self.test(test_loader, scene_id = idx)
+                    
+                    if X.rvs(1)[0] ==1:
+                        self.test(test_loader, scene_id = idx)
+                        
             #GPUtil.showUtilization()
 
 
@@ -754,8 +810,10 @@ class Trainer(object):
             # update grid every 16 steps
             if self.model.module.cuda_ray and self.global_step % self.opt.update_extra_interval == 0:
                 with torch.cuda.amp.autocast(enabled=self.fp16):
-                    self.model.module.scene_id = 0
-                    self.model.module.update_extra_state()
+                    for idx in range(self.opt.num_scenes):
+                        self.model.module.scene_id = idx
+                    
+                        self.model.module.update_extra_state(idx)
 
 
             self.local_step += 1
@@ -763,13 +821,23 @@ class Trainer(object):
 
             self.optimizer.zero_grad()
             meta_bs = min(len(self.text_z), self.opt.meta_batch_size)
-            scene_ids = random.sample(list(range(0,len(self.text_z)))[:num_objects], min(self.opt.meta_batch_size, len(list(range(0,len(self.text_z)))[:num_objects])))
+
+            #TODO: revert
+            if self.opt.skip_list is None: 
+                scene_ids = random.sample(list(range(0,len(self.text_z)))[:num_objects], min(self.opt.meta_batch_size, len(list(range(0,len(self.text_z)))[:num_objects])))
+            else:
+                train_scenes = list(set(list(range(0,len(self.text_z)))[:num_objects]) - set(self.opt.skip_list))
+                scene_ids = random.sample(train_scenes, min(self.opt.meta_batch_size, len(train_scenes))) 
+            #scene_ids = [1]
+
             #scene_id = torch.bernoulli(torch.tensor([0.0]))
             #scene_id = int(scene_id.item())
+            #scene_ids = [self.global_step%2]
             with torch.cuda.amp.autocast(enabled=self.fp16):
                 full_loss = 0
                 for scene_id in scene_ids:
                     pred_rgbs, pred_ws, loss = self.train_step(data, scene_id)
+                    
                     full_loss = full_loss + loss
                 loss = full_loss/len(scene_ids)
 
@@ -936,6 +1004,8 @@ class Trainer(object):
             'epoch': self.epoch,
             'global_step': self.global_step,
             'stats': self.stats,
+            'num_scenes': self.opt.num_scenes
+            
         }
 
         if self.model.module.cuda_ray:
@@ -1019,7 +1089,8 @@ class Trainer(object):
                 self.model.module.mean_count = checkpoint_dict['mean_count']
             if 'mean_density' in checkpoint_dict:
                 self.model.module.mean_density = checkpoint_dict['mean_density']
-
+        
+        self.model.module.num_scenes = checkpoint_dict['num_scenes']
         if model_only:
             return
 
