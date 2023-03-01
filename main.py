@@ -7,7 +7,7 @@ from optimizer import Shampoo
 import wandb
 from pdb import set_trace
 import copy
-torch.backends.cudnn.enabled = True 
+torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 # from nerf.gui import NeRFGUI
 
@@ -28,7 +28,11 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--engineer_prefix', type=str, default=None, help="prefix prompt")
+    parser.add_argument('--text', type=str, default=None, help="text prompt")
+
+    ## INTERPOLATION
     parser.add_argument('--style', type=str, default=None, help="style prompt")
+    parser.add_argument('--style_post', type=str, default=None, help="style prompt -- goes after object")
     parser.add_argument('--object', type=str, default=None, help="object prompt")
     parser.add_argument('--engineer_suffix', type=str, default=None, help="suffix prompt")
     parser.add_argument('--poolstyle', action='store_true', help="pool the style tokens (color/obj separately)")
@@ -45,6 +49,8 @@ if __name__ == '__main__':
     parser.add_argument('--interponlyobj', action='store_true')
     parser.add_argument('--textindex', type=str, default=None, help="npy array containing indices to interpolate for txt file")
     parser.add_argument('--interpindex', type=str, default=None, help="npy array containing indices to interpolate for interp file")
+
+    ## ETC
     parser.add_argument('--save_mesh', action='store_true', help="export an obj mesh with texture")
     parser.add_argument('--eval_interval', type=int, default=10, help="evaluate on the valid set every interval epochs")
     parser.add_argument('--workspace', type=str, default='workspace')
@@ -55,7 +61,8 @@ if __name__ == '__main__':
     ### training options
     parser.add_argument('--iters', type=int, default=10000, help="training iters")
     parser.add_argument('--lr', type=float, default=1e-3, help="initial learning rate")
-    parser.add_argument('--ckpt', type=str, default='latest')
+    parser.add_argument('--ckpt', type=str, default='latest', choices={"scratch", "latest", "latest_model", "best"}, help="choose how to load checkpoint")
+    parser.add_argument('--ckpt_path', type=str, default=None, help="path to saved checkpoint models")
     parser.add_argument('--cuda_ray', action='store_true', help="use CUDA raymarching instead of pytorch")
     parser.add_argument('--max_steps', type=int, default=1024, help="max num steps sampled per ray (only valid when using --cuda_ray)")
     parser.add_argument('--num_steps', type=int, default=64, help="num steps sampled per ray (only valid when not using --cuda_ray)")
@@ -131,12 +138,12 @@ if __name__ == '__main__':
     parser.add_argument('--curricullum', action = 'store_true')
     ### Distillation options
     parser.add_argument('--load_teachers', type=str, default=None)
-    parser.add_argument('--teacher_size', type = int, default = 1 ) 
+    parser.add_argument('--teacher_size', type = int, default = 1 )
     #### Other option
     parser.add_argument('--mem', action='store_true', help="overwrite current experiment")
     parser.add_argument('--dummy', action='store_true', help="overwrite current experiment")
     parser.add_argument('--test_teachers', action='store_true', help="overwrite current experiment")
-    parser.add_argument('--not_diff_loss', action='store_true', help="overwrite current experiment") 
+    parser.add_argument('--not_diff_loss', action='store_true', help="overwrite current experiment")
     parser.add_argument('--dist_image_loss', action='store_true', help="overwrite current experiment")
     parser.add_argument('--dist_sigma_rgb_loss', action='store_true', help="overwrite current experiment")
     parser.add_argument('--dist_depth_loss', action='store_true', help="overwrite current experiment")
@@ -153,63 +160,82 @@ if __name__ == '__main__':
     opt.interpstyleidx = None
     opt.interpobjidx = None
 
-    opt.text = []
-    if opt.engineer_prefix:
-        with open(opt.engineer_prefix) as f:
-            lines = f.readlines()
+    if opt.text:
+        with open(opt.text) as f:
+                lines = f.readlines()
         opt.text = [" ".join(line.split()) for line in lines]
 
-    if opt.style:
-        with open(opt.style) as f:
-            lines = f.readlines()
+    if opt.interp:
+        opt.text = []
+        if opt.engineer_prefix:
+            with open(opt.engineer_prefix) as f:
+                lines = f.readlines()
+            opt.text = [" ".join(line.split()) for line in lines]
 
-        # Save starting indices of style prompt
-        if len(opt.text) == 0:
-            opt.textstyleidx = [0 for _ in range(len(lines))]
-        else:
-            opt.textstyleidx = [len(line)+1 for line in opt.text] ## Accounts for the space
+        if opt.style:
+            with open(opt.style) as f:
+                lines = f.readlines()
 
-        lines = [" ".join(line.split()) for line in lines]
-        opt.text = [opt.text[i] + " " + lines[i]  for i in range(min(len(opt.text), len(lines)))]
+            # Save starting indices of style prompt
+            if len(opt.text) == 0:
+                opt.textstyleidx = [0 for _ in range(len(lines))]
+            else:
+                opt.textstyleidx = [len(line)+1 for line in opt.text] ## Accounts for the space
 
-        # Save ending indices of style prompt
-        opt.textstyleidx = [(opt.textstyleidx[i], len(opt.text[i])) for i in range(len(opt.text))]
+            lines = [" ".join(line.split()) for line in lines]
+            opt.text = [opt.text[i] + " " + lines[i]  for i in range(min(len(opt.text), len(lines)))]
 
-        for i in range(len(opt.textstyleidx)):
-            assert lines[i] == opt.text[i][opt.textstyleidx[i][0]:opt.textstyleidx[i][1]], f"Mismatched color prompt and idx: {lines[i]} vs {opt.text[opt.textstyleidx[i][0]:opt.textstyleidx[i][1]]}"
+            # Save ending indices of style prompt
+            opt.textstyleidx = [(opt.textstyleidx[i], len(opt.text[i])) for i in range(len(opt.text))]
 
-    if opt.object:
-        with open(opt.object) as f:
-            lines = f.readlines()
+            for i in range(len(opt.textstyleidx)):
+                assert lines[i] == opt.text[i][opt.textstyleidx[i][0]:opt.textstyleidx[i][1]], f"Mismatched color prompt and idx: {lines[i]} vs {opt.text[opt.textstyleidx[i][0]:opt.textstyleidx[i][1]]}"
 
-        # Save starting indices of obj prompt
-        opt.objstyleidx = [len(line)+1 for line in opt.text] ## Accounts for the space
+        if opt.object:
+            with open(opt.object) as f:
+                lines = f.readlines()
 
-        lines = [" ".join(line.split()) for line in lines]
-        opt.text = [opt.text[i] + " " + lines[i]  for i in range(min(len(opt.text), len(lines)))]
+            # Save starting indices of obj prompt
+            opt.objstyleidx = [len(line)+1 for line in opt.text] ## Accounts for the space
 
-        # Save ending indices of obj prompt
-        opt.objstyleidx = [(opt.objstyleidx[i], len(opt.text[i])) for i in range(len(opt.text))]
+            lines = [" ".join(line.split()) for line in lines]
+            opt.text = [opt.text[i] + " " + lines[i]  for i in range(min(len(opt.text), len(lines)))]
 
-        for i in range(len(opt.objstyleidx)):
-            assert lines[i] == opt.text[i][opt.objstyleidx[i][0]:opt.objstyleidx[i][1]], f"Mismatched obj prompt and idx: {lines[i]} vs {opt.text[opt.objstyleidx[i][0]:opt.objstyleidx[i][1]]}"
+            # Save ending indices of obj prompt
+            opt.objstyleidx = [(opt.objstyleidx[i], len(opt.text[i])) for i in range(len(opt.text))]
 
-    if opt.engineer_suffix:
-        with open(opt.engineer_suffix) as f:
-            lines = f.readlines()
-        lines = [" ".join(line.split()) for line in lines]
-        opt.text = [opt.text[i] + " " + lines[i] for i in range(min(len(opt.text), len(lines)))]
+            for i in range(len(opt.objstyleidx)):
+                assert lines[i] == opt.text[i][opt.objstyleidx[i][0]:opt.objstyleidx[i][1]], f"Mismatched obj prompt and idx: {lines[i]} vs {opt.text[opt.objstyleidx[i][0]:opt.objstyleidx[i][1]]}"
+
+        if opt.style_post:
+            with open(opt.style_post) as f:
+                lines = f.readlines()
+
+            # Get style indices if nonempty
+            opt.textstyleidx = [len(opt.text)[i]+1 if len(lines[i]) > 0 else opt.textstyleidx[i] for i in range(len(lines))] ## Accounts for the space
+
+            lines = [" ".join(line.split()) for line in lines]
+            opt.text = [opt.text[i] + " " + lines[i]  for i in range(min(len(opt.text), len(lines)))]
+
+            # Save ending indices of style prompt
+            opt.textstyleidx = [(opt.textstyleidx[i], len(opt.text[i])) if len(lines[i]) > 0 else opt.textstyleidx[i] for i in range(len(lines))]
+
+            for i in range(len(opt.textstyleidx)):
+                if len(lines[i]) > 0:
+                    assert lines[i] == opt.text[i][opt.textstyleidx[i][0]:opt.textstyleidx[i][1]], f"Mismatched color prompt and idx: {lines[i]} vs {opt.text[opt.textstyleidx[i][0]:opt.textstyleidx[i][1]]}"
+
+
+        if opt.engineer_suffix:
+            with open(opt.engineer_suffix) as f:
+                lines = f.readlines()
+            lines = [" ".join(line.split()) for line in lines]
+            opt.text = [opt.text[i] + " " + lines[i] for i in range(min(len(opt.text), len(lines)))]
 
     # Clean
     import re
     opt.text = [re.sub(r'\s([,?.!"](?:\s|$))', r'\1', line) for line in opt.text]
     opt.text = [" ".join(line.split()) for line in opt.text]
     opt.num_scenes = len(opt.text)
-    if opt.debug:
-        opt.text = opt.text[3:]
-        opt.objstyleidx = opt.objstyleidx[3:]
-        opt.textstyleidx = opt.textstyleidx[3:]
-        
     print(opt.text)
 
     # Interpolation file
@@ -336,7 +362,7 @@ if __name__ == '__main__':
     if opt.interpindex:
         opt.interpindex = np.load(opt.interpindex)
 
-    opt.workspace = os.path.join("outputs", opt.project_name, opt.exp_name)
+    # opt.workspace = os.path.join("outputs", opt.project_name, opt.exp_name)
     if opt.overwrite and os.path.exists(opt.workspace) and not opt.test:
         clear_directory(opt.workspace)
 
@@ -375,12 +401,12 @@ if __name__ == '__main__':
        from nerf.hyper_network_grid import HyperTransNeRFNetwork as NeRFNetwork
 
     if True:
-        model = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim,wandb_obj=wandb ), device_ids = [0])
+        model = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim,wandb_obj=wandb), device_ids = [0])
     else:
         model = NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim)
 
 
-    if opt.load_teachers is not None: 
+    if opt.load_teachers is not None:
         with open(opt.load_teachers) as f:
             lines = f.readlines()
         lines = [line.replace("\n", "") for line in lines]
@@ -388,11 +414,11 @@ if __name__ == '__main__':
 
         model.teacher_models = []
         for idx, path in enumerate(opt.teacher_paths):
-            print(path) 
+            print(path)
             model_path =  glob.glob(opt.teacher_paths[idx]+"/checkpoints/*")[-1]
             model_teacher = nn.DataParallel(NeRFNetwork(opt, num_layers= opt.num_layers, hidden_dim = opt.hidden_dim,wandb_obj=wandb, teacher_flag = True), device_ids = [0])
         #TODO fix these
-            
+
             #model_teacher.module.scene_id = idx
             model_teacher.module.sigma_net.epoch = 0
             model_teacher.module.load_checkpoint( checkpoint = model_path)
@@ -408,9 +434,9 @@ if __name__ == '__main__':
                     test_loader = NeRFDataset(opt, device='cuda', type='test', H=opt.H, W=opt.W, size=100).dataloader()
                     model_teacher.module.sigma_net.epoch = 0
                     trainer.test(test_loader, scene_id = idx)
-    
 
-     
+
+
     #print(model)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

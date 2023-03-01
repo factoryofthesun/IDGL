@@ -304,7 +304,11 @@ class Trainer(object):
             self.log_path = os.path.join(workspace, f"log_{self.name}.txt")
             self.log_ptr = open(self.log_path, "a+")
 
-            self.ckpt_path = os.path.join(self.workspace, 'checkpoints')
+            if self.opt.ckpt_path is None:
+                self.ckpt_path = os.path.join(self.workspace, 'checkpoints')
+            else:
+                self.ckpt_path = self.opt.ckpt_path
+
             self.best_path = f"{self.ckpt_path}/{self.name}.pth"
             os.makedirs(self.ckpt_path, exist_ok=True)
 
@@ -370,7 +374,7 @@ class Trainer(object):
         #    set_trace()
         #    print(check['input_vec'])
         #self.model.module.conditioning_vector[scene_id] = check
-        
+
         if self.opt.mem:
             torch.cuda.empty_cache()
 
@@ -397,7 +401,7 @@ class Trainer(object):
                 ambient_ratio = 0.1
 
         # _t = time.time()
-       
+
         bg_color = torch.rand((B * N, 3), device=rays_o.device) # pixel-wise random
         if self.opt.mem:
             torch.cuda.empty_cache()
@@ -419,7 +423,7 @@ class Trainer(object):
                 teacher_outputs = current_teacher.module.render(rays_o, rays_d, staged=False, perturb=True, bg_color=bg_color, ambient_ratio=ambient_ratio, shading=shading, force_all_rays=True, **vars(self.opt))
                 teacher_pred_rgb = teacher_outputs['image'].reshape(B, H, W, 3).permute(0, 3, 1, 2).contiguous() # [1, 3, H, W]
         '''
-        
+
         if self.opt.dist_image_loss:
             '''
             if scene_id == 0:
@@ -456,8 +460,8 @@ class Trainer(object):
             loss = loss+ self.opt.lambda_stable_diff* self.guidance.train_step(text_z, pred_rgb)
 
         #if self.opt.load_teachers is not None:
-        #    loss = self.opt.lambda_stable_diff*loss +  self.opt.lambda_teacher*teacher_loss + 
-       
+        #    loss = self.opt.lambda_stable_diff*loss +  self.opt.lambda_teacher*teacher_loss +
+
 
         #if self.wandb_obj is not None:
         #    self.wandb_obj.log({'guidance_loss':loss.item()})
@@ -574,15 +578,15 @@ class Trainer(object):
                 self.save_checkpoint(full=True, best=False)
 
             #GPUtil.showUtilization()
-            X = bernoulli(.08) 
+            X = bernoulli(.08)
             if self.epoch % self.eval_interval == 0:
                 for idx, val in enumerate(self.text_z):
                     self.evaluate_one_epoch(valid_loader, scene_id= idx)
                     self.save_checkpoint(full=False, best=True)
-                    
+
                     if X.rvs(1)[0] ==1:
                         self.test(test_loader, scene_id = idx)
-                        
+
             #GPUtil.showUtilization()
 
 
@@ -812,7 +816,7 @@ class Trainer(object):
                 with torch.cuda.amp.autocast(enabled=self.fp16):
                     for idx in range(self.opt.num_scenes):
                         self.model.module.scene_id = idx
-                    
+
                         self.model.module.update_extra_state(idx)
 
 
@@ -823,11 +827,11 @@ class Trainer(object):
             meta_bs = min(len(self.text_z), self.opt.meta_batch_size)
 
             #TODO: revert
-            if self.opt.skip_list is None: 
+            if self.opt.skip_list is None:
                 scene_ids = random.sample(list(range(0,len(self.text_z)))[:num_objects], min(self.opt.meta_batch_size, len(list(range(0,len(self.text_z)))[:num_objects])))
             else:
                 train_scenes = list(set(list(range(0,len(self.text_z)))[:num_objects]) - set(self.opt.skip_list))
-                scene_ids = random.sample(train_scenes, min(self.opt.meta_batch_size, len(train_scenes))) 
+                scene_ids = random.sample(train_scenes, min(self.opt.meta_batch_size, len(train_scenes)))
             #scene_ids = [1]
 
             #scene_id = torch.bernoulli(torch.tensor([0.0]))
@@ -837,7 +841,7 @@ class Trainer(object):
                 full_loss = 0
                 for scene_id in scene_ids:
                     pred_rgbs, pred_ws, loss = self.train_step(data, scene_id)
-                    
+
                     full_loss = full_loss + loss
                 loss = full_loss/len(scene_ids)
 
@@ -1005,7 +1009,7 @@ class Trainer(object):
             'global_step': self.global_step,
             'stats': self.stats,
             'num_scenes': self.opt.num_scenes
-            
+
         }
 
         if self.model.module.cuda_ray:
@@ -1089,7 +1093,7 @@ class Trainer(object):
                 self.model.module.mean_count = checkpoint_dict['mean_count']
             if 'mean_density' in checkpoint_dict:
                 self.model.module.mean_density = checkpoint_dict['mean_density']
-        
+
         self.model.module.num_scenes = checkpoint_dict['num_scenes']
         if model_only:
             return
